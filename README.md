@@ -36,3 +36,9 @@ Boris Solodki — solboki@solodki.fr
 ## Désinstallation
 `systemctl --user disable --now keepass-kbd` puis `devel-su sh ~/keepass-kbd/uninstall-layout.sh`,
 et retirer `'keepass.qml'` de `dconf read /sailfish/text_input/enabled_layouts`.
+
+## Versions
+- Version unique dans `Cargo.toml` ; `install-layout.sh` la recopie dans la disposition et la page Paramètres.
+- Historique : `CHANGELOG.md` (noter les changements sous « [Non publié] »).
+- Nouvelle version : `scripts/bump-version.sh patch|minor|major` (met à jour Cargo.toml, CHANGELOG,
+  commit et étiquette git `vX.Y.Z`). Passage en 1.0.0 à la première diffusion publique.
