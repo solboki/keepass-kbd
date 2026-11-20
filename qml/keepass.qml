@@ -70,6 +70,39 @@ KeyboardLayout {
         settingsUi.call("showPage", ["system_settings/system/text_input/keepass_kbd"])
     }
 
+    // Choix du fichier .kdbx dans le clavier même : on reste dans l'application en cours.
+    property string pickPath: ""
+    property var pickListing: ({})
+    property var pickItems: []
+    function openPicker(p) {
+        mode = "pick"; typing = false; editing = ""; statusMessage = ""
+        daemon.typedCall("ListDir", [{ "type": "s", "value": p }], function(json) {
+            var r = {}
+            try { r = JSON.parse(json) } catch (e) {}
+            pickListing = r
+            pickPath = r.path || ""
+            var items = []
+            if (r.parent && r.path !== "/") items.push({ kind: "up", name: ".." })
+            var d = r.dirs || [], f = r.files || []
+            for (var i = 0; i < d.length; ++i) items.push({ kind: "dir", name: d[i] })
+            for (var j = 0; j < f.length; ++j) items.push({ kind: "file", name: f[j] })
+            pickItems = items
+            pickList.positionViewAtBeginning()
+        }, function() { statusMessage = t("keepass-kbd service unreachable") })
+    }
+    function pickFile(name) {
+        daemon.typedCall("SetDatabase", [{ "type": "s", "value": pickPath.replace(/\/$/, "") + "/" + name }], function(json) {
+            var r = {}
+            try { r = JSON.parse(json) } catch (e) {}
+            if (r.ok) {
+                mode = "missing"; pickItems = []
+                refreshStatus()
+            } else {
+                statusMessage = r.error || t("Unable to use this file")
+            }
+        }, function() { statusMessage = t("keepass-kbd service unreachable") })
+    }
+
     // Dernière disposition utilisée avant KeePass (FUTO en général).
     property int previousIndex: -1
 
@@ -107,13 +140,14 @@ KeyboardLayout {
                 refreshOrigin()
                 search()
             } else if (s.state === "missing") {
-                mode = "missing"
                 databaseConfigured = !!s.database
+                if (mode === "pick") return
+                mode = "missing"
                 // Premier lancement (aucune base choisie) : ouvrir le choix du fichier, une fois.
                 if (!s.database && !firstRunPrompted && canvas.activeIndex === layoutIndex
                         && MInputMethodQuick.active) {
                     firstRunPrompted = true
-                    openSettings()
+                    openPicker("")
                 }
             } else {
                 mode = "locked"; editing = "master"; typing = false
@@ -560,7 +594,8 @@ KeyboardLayout {
                 spacing: Theme.paddingMedium
                 Icon {
                     anchors.verticalCenter: parent.verticalCenter
-                    source: root.mode === "locked" ? "image://theme/icon-m-device-lock" : "image://theme/icon-m-keys"
+                    source: root.mode === "locked" ? "image://theme/icon-m-device-lock"
+                          : root.mode === "pick" ? "image://theme/icon-m-folder" : "image://theme/icon-m-keys"
                     width: Theme.iconSizeSmallPlus; height: width
                     color: Theme.highlightColor
                 }
@@ -574,6 +609,7 @@ KeyboardLayout {
                         color: Theme.highlightColor
                         text: root.mode === "generate" ? root.t("New password")
                               : root.mode === "save" ? root.t("Save to KeePass")
+                              : root.mode === "pick" ? root.t("Choose a KeePass database")
                               : "KeePass"
                     }
                     Label {
@@ -584,6 +620,7 @@ KeyboardLayout {
                                                                                : Theme.secondaryColor
                         text: root.busyText !== "" ? root.busyText
                               : root.statusMessage !== "" ? root.statusMessage
+                              : root.mode === "pick" ? root.pickPath
                               : root.mode === "locked" ? root.t("Database locked")
                               : root.mode === "missing" ? root.t("Database not found")
                               : root.mode === "offline" ? root.t("Service stopped")
@@ -599,12 +636,14 @@ KeyboardLayout {
                 // L'engrenage reste le dernier élément : toujours aligné sur le bord droit.
                 KpxButton {
                     visible: root.mode === "list" || root.mode === "generate" || root.mode === "save"
+                             || root.mode === "pick"
                     width: root.unit * 1.05; height: root.unit * 0.8
                     flat: true
                     iconSource: root.mode === "list" ? "image://theme/icon-m-add" : "image://theme/icon-m-back"
                     onClicked: {
                         root.statusMessage = ""
-                        if (root.mode === "list") { root.mode = "generate"; root.typing = false; root.generate() }
+                        if (root.mode === "pick") { root.mode = "missing"; root.pickItems = []; root.refreshStatus() }
+                        else if (root.mode === "list") { root.mode = "generate"; root.typing = false; root.generate() }
                         else { root.clearSecrets(); root.mode = "list"; root.typing = false; root.editing = "" }
                     }
                 }
@@ -1034,8 +1073,52 @@ KeyboardLayout {
                     highlighted: true
                     iconSource: "image://theme/icon-m-folder"
                     text: root.t("Choose the database file…")
-                    onClicked: root.openSettings()
+                    onClicked: root.openPicker("")
                 }
+            }
+
+            // ── Choix du fichier .kdbx ────────────────────────────────
+            SilicaListView {
+                id: pickList
+                visible: root.mode === "pick"
+                anchors.fill: parent
+                clip: true
+                model: root.pickItems
+                delegate: BackgroundItem {
+                    width: pickList.width
+                    height: root.unit * 0.85
+                    onClicked: {
+                        if (modelData.kind === "up") root.openPicker(root.pickListing.parent)
+                        else if (modelData.kind === "dir") root.openPicker(root.pickPath.replace(/\/$/, "") + "/" + modelData.name)
+                        else root.pickFile(modelData.name)
+                    }
+                    Icon {
+                        id: pickIcon
+                        anchors { left: parent.left; leftMargin: Theme.paddingMedium; verticalCenter: parent.verticalCenter }
+                        source: modelData.kind === "file" ? "image://theme/icon-m-keys"
+                              : modelData.kind === "up" ? "image://theme/icon-m-back" : "image://theme/icon-m-folder"
+                        color: modelData.kind === "file" ? Theme.highlightColor : Theme.primaryColor
+                    }
+                    Label {
+                        anchors { left: pickIcon.right; leftMargin: Theme.paddingMedium; right: parent.right
+                                  rightMargin: Theme.paddingMedium; verticalCenter: parent.verticalCenter }
+                        truncationMode: TruncationMode.Fade
+                        font.pixelSize: Theme.fontSizeSmall
+                        textFormat: Text.PlainText
+                        color: modelData.kind === "file" ? Theme.highlightColor : Theme.primaryColor
+                        text: modelData.kind === "up" ? root.t("Parent folder") : modelData.name
+                    }
+                }
+                Label {
+                    visible: pickList.count === 0
+                    anchors.centerIn: parent
+                    width: parent.width - 2 * Theme.paddingLarge
+                    wrapMode: Text.Wrap
+                    horizontalAlignment: Text.AlignHCenter
+                    color: Theme.secondaryColor
+                    text: root.pickListing.error ? root.t("Cannot open this folder") : root.t("No folder or .kdbx file here")
+                }
+                VerticalScrollDecorator {}
             }
 
             KpxMiniKeyboard {

@@ -6,6 +6,12 @@ after listing the changes under “Unreleased”.
 
 ## [Unreleased]
 
+## [1.0.2] - 2026-11-20
+### Changed
+- The database file is now chosen directly in the KeePass layout (first launch and “Choose the database
+  file…” button): you stay in the current app and can unlock right after choosing, instead of being sent
+  to the Settings app.
+
 ## [1.0.1] - 2026-11-20
 ### Fixed
 - Choosing the database file failed for folders on FUSE mounts without `allow_other` (rclone, sshfs…):
