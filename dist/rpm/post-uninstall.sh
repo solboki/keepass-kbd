@@ -10,5 +10,6 @@ for_each_session() {
 }
 
 if [ "$1" = 0 ]; then
+    systemctl daemon-reload >/dev/null 2>&1 || :
     for_each_session 'systemctl --user daemon-reload; systemctl --user restart maliit-server.service'
 fi

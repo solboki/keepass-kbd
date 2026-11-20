@@ -1,0 +1,71 @@
+#!/bin/sh
+# Clavier KeePass — touche KeePass dans les pavés numérique et téléphone du clavier Jolla (root).
+#   numpad-patch apply   ajoute la touche (sans effet si elle est déjà là)
+#   numpad-patch remove  la retire et rend au pavé son état d'origine
+#   numpad-patch status  indique si la touche est en place
+# Chaque fichier ne reçoit que des lignes marquées « // keepass-kbd » : la case vide en bas
+# à gauche accueille un Loader de layouts/KpxNumpadKey.qml, de largeur nulle si ce fichier
+# manque ou si la disposition KeePass est désactivée (le pavé garde alors son aspect).
+# Le pavé téléphone en portrait n'a pas de case vide : sa rangée du bas passe de 4 à 5 touches.
+# Une mise à jour de jolla-keyboard remplace ces fichiers : keepass-kbd-numpad.service
+# rejoue « apply » à chaque démarrage.
+DIR=${KPX_JOLLA_DIR:-/usr/share/maliit/plugins/com/jolla}
+MARK='// keepass-kbd'
+# loader "largeur de la touche"
+loader() {
+    echo "        Loader { id: kpxNumpad; width: item && item.visible ? $1 : 0; height: geometry.keyHeightPortrait; source: \"layouts/KpxNumpadKey.qml\" } $MARK"
+}
+LOADER=$(loader main.keyWidth | sed 's/&/\\&/g')
+
+# patch_file fichier "x d'origine" "x en expression régulière"
+patch_file() {
+    f="$DIR/$1"
+    [ -f "$f" ] || { echo "absent : $f"; return 1; }
+    grep -q "$MARK" "$f" && return 0
+    [ "$(grep -c "^        x: $3\$" "$f")" = 1 ] || { echo "pavé non reconnu, laissé tel quel : $f"; return 1; }
+    sed -i "s|^        x: $3\$|        x: $2 - kpxNumpad.width $MARK-x\n$LOADER|" "$f" && echo "touche ajoutée : $f"
+}
+
+# Pavé téléphone en portrait : Loader en tête de la 4ᵉ rangée, dont les 4 touches se partagent
+# la largeur restante.
+patch_phone_portrait() {
+    f="$DIR/PhoneNumberLayoutPortrait.qml"
+    [ -f "$f" ] || { echo "absent : $f"; return 1; }
+    grep -q "$MARK" "$f" && return 0
+    if [ "$(grep -c '^    Row {$' "$f")" != 4 ] || [ "$(grep -c '^            width: main\.width / 4$' "$f")" != 16 ]; then
+        echo "pavé non reconnu, laissé tel quel : $f"; return 1
+    fi
+    awk -v L="$(loader 'main.width / 5')" -v W="(main.width - kpxNumpad.width) / 4 $MARK-w" '
+        /^    Row \{$/ { row++ }
+        row == 4 && !done && /^        [A-Za-z]+Key \{$/ { print L; done = 1 }
+        row == 4 && /^            width: main\.width \/ 4$/ { $0 = "            width: " W }
+        { print }' "$f" > "$f.kpx" && cat "$f.kpx" > "$f" && rm -f "$f.kpx" && echo "touche ajoutée : $f"
+}
+
+unpatch_file() {
+    f="$DIR/$1"
+    [ -f "$f" ] && grep -q "$MARK" "$f" || return 0
+    sed -i "\\| $MARK\$|d; s| - kpxNumpad.width $MARK-x\$||; s|(main.width - kpxNumpad.width) / 4 $MARK-w\$|main.width / 4|" "$f" \
+        && echo "touche retirée : $f"
+}
+
+case "$1" in
+    apply)
+        rc=0
+        patch_file NumberLayoutPortrait.qml "main.keyWidth" "main\.keyWidth" || rc=1
+        patch_file NumberLayoutLandscape.qml "4 * main.keyWidth" "4 \* main\.keyWidth" || rc=1
+        patch_file PhoneNumberLayoutLandscape.qml "3 * main.keyWidth" "3 \* main\.keyWidth" || rc=1
+        patch_phone_portrait || rc=1
+        exit $rc ;;
+    remove)
+        unpatch_file NumberLayoutPortrait.qml
+        unpatch_file NumberLayoutLandscape.qml
+        unpatch_file PhoneNumberLayoutPortrait.qml
+        unpatch_file PhoneNumberLayoutLandscape.qml ;;
+    status)
+        for f in NumberLayoutPortrait.qml NumberLayoutLandscape.qml PhoneNumberLayoutPortrait.qml PhoneNumberLayoutLandscape.qml; do
+            if grep -q "$MARK" "$DIR/$f" 2>/dev/null; then echo "$f : touche en place"; else echo "$f : sans touche"; fi
+        done ;;
+    *)
+        echo "usage : $0 apply|remove|status" >&2; exit 2 ;;
+esac

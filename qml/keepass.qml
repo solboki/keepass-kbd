@@ -46,8 +46,9 @@ KeyboardLayout {
     readonly property real unit: keyHeight > 0 ? keyHeight : Theme.itemSizeSmall
     readonly property bool passwordField: MInputMethodQuick.hiddenText
                                           || !!MInputMethodQuick.extensions.sensitiveInput
-    // Champ numérique (code de double authentification probable) : Maliit.NumberContentType.
-    readonly property bool numberField: MInputMethodQuick.contentType === 1
+    // Champ numérique ou téléphone (code de double authentification probable) :
+    // Maliit.NumberContentType ou PhoneNumberContentType, où le clavier Jolla affiche un pavé.
+    readonly property bool numberField: MInputMethodQuick.contentType === 1 || MInputMethodQuick.contentType === 2
 
     // Codes à usage unique (TOTP) : option des Paramètres, désactivée par défaut.
     property bool totpEnabled: false
@@ -69,7 +70,10 @@ KeyboardLayout {
         daemon.typedCall("Totp", [{ "type": "s", "value": selected.id }], function(json) {
             var r = {}
             try { r = JSON.parse(json) } catch (e) {}
-            if (r.code) commit(r.code)
+            if (!r.code) return
+            commit(r.code)
+            // Code tapé dans un champ numérique : retour au pavé numérique.
+            if (root.numberField) root.backToKeyboard()
         }, function() { refreshStatus() })
     }
     readonly property string originLabel: origin.indexOf("app://") === 0 ? origin.substring(6)
@@ -135,6 +139,10 @@ KeyboardLayout {
     function backToKeyboard() {
         clearSecrets()
         typing = false
+        // Ouverte depuis le pavé numérique (touche KeePass) : y revenir d'abord, le
+        // changement de disposition qui suit se fait alors sans être visible.
+        if (numberField && typeof keyboard.updateLayout === "function")
+            keyboard.updateLayout(true)
         var model = canvas.layoutModel
         if (previousIndex >= 0 && previousIndex < model.count && previousIndex !== layoutIndex) {
             var p = model.get(previousIndex)

@@ -1,0 +1,12 @@
+[Unit]
+Description=KeePass Keyboard: KeePass key in the Jolla number pad
+# Avant les sessions utilisateur, donc avant le démarrage du clavier (maliit-server).
+Before=systemd-user-sessions.service
+ConditionPathExists=/usr/share/maliit/plugins/com/jolla/layouts/KpxNumpadKey.qml
+
+[Service]
+Type=oneshot
+ExecStart=/usr/libexec/keepass-kbd/numpad-patch apply
+
+[Install]
+WantedBy=multi-user.target

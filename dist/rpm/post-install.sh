@@ -17,5 +17,10 @@ if [ "$1" = 1 ]; then
     # Première installation : activer la disposition KeePass à côté des claviers existants.
     for_each_session 'cur=$(dconf read /sailfish/text_input/enabled_layouts); case "$cur" in *keepass.qml*) ;; ""|"[]") ;; *) dconf write /sailfish/text_input/enabled_layouts "$(echo "$cur" | sed "s/]\$/, '"'"'keepass.qml'"'"']/")" ;; esac'
 fi
+# Touche KeePass dans le pavé numérique du clavier Jolla, remise à chaque démarrage
+# (une mise à jour de jolla-keyboard la retire).
+systemctl daemon-reload >/dev/null 2>&1 || :
+systemctl enable keepass-kbd-numpad.service >/dev/null 2>&1 || :
+/usr/libexec/keepass-kbd/numpad-patch apply >/dev/null 2>&1 || :
 # Recharger le clavier pour prendre en compte les fichiers QML.
 for_each_session 'systemctl --user restart maliit-server.service'

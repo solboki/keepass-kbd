@@ -10,6 +10,9 @@ for_each_session() {
 }
 
 if [ "$1" = 0 ]; then
+    # Rendre au pavé numérique du clavier Jolla son état d'origine.
+    systemctl disable keepass-kbd-numpad.service >/dev/null 2>&1 || :
+    /usr/libexec/keepass-kbd/numpad-patch remove >/dev/null 2>&1 || :
     # Désinstallation complète : retirer la disposition et arrêter le service.
     for_each_session 'cur=$(dconf read /sailfish/text_input/enabled_layouts); new=$(echo "$cur" | sed "s/, *'"'"'keepass.qml'"'"'//; s/'"'"'keepass.qml'"'"', *//"); dconf write /sailfish/text_input/enabled_layouts "$new"; [ "$(dconf read /sailfish/text_input/active_layout)" = "'"'"'keepass.qml'"'"'" ] && dconf write /sailfish/text_input/active_layout "$(echo "$new" | sed "s/^\\[ *\\('"'"'[^'"'"']*'"'"'\\).*/\\1/")"; systemctl --user stop keepass-kbd.service'
     for_each_session 'systemctl --user daemon-reload; systemctl --user stop keepass-kbd.service'

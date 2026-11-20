@@ -8,9 +8,13 @@ if rpm -q keepass-kbd >/dev/null 2>&1; then
     exit $?
 fi
 # Installation manuelle (scripts du dépôt) :
+systemctl disable keepass-kbd-numpad.service 2>/dev/null
+[ -x /usr/libexec/keepass-kbd/numpad-patch ] && /usr/libexec/keepass-kbd/numpad-patch remove
+rm -f /usr/lib/systemd/system/keepass-kbd-numpad.service
+systemctl daemon-reload 2>/dev/null
 LAYOUTS=/usr/share/maliit/plugins/com/jolla/layouts
 rm -f "$LAYOUTS/keepass.qml" "$LAYOUTS/KpxButton.qml" "$LAYOUTS/KpxMiniKeyboard.qml" \
-      "$LAYOUTS/KpxBackspaceButton.qml" "$LAYOUTS/KpxLineField.qml" "$LAYOUTS/KpxStrings.js" \
+      "$LAYOUTS/KpxBackspaceButton.qml" "$LAYOUTS/KpxLineField.qml" "$LAYOUTS/KpxStrings.js" "$LAYOUTS/KpxNumpadKey.qml" \
       "$LAYOUTS/layouts_keepass.conf"
 rm -f /usr/share/maliit/plugins/com/jolla/handlers/KeepassInputHandler.qml
 rm -rf /usr/share/jolla-settings/pages/keepass-kbd

@@ -47,7 +47,7 @@ no import, no second vault, and changes made elsewhere (KeePassXC, KeePassDX…)
 - Switch to the **KeePass** layout like any other keyboard (long-press or swipe on the space bar, depending on your keyboard).
 - Type your master password on the mini keyboard, then ✓. Tap the eye to show it; tap anywhere in the text to move the cursor.
 - **Fill a login**: tap the entry (suggested entries are starred). Use *Username* / *Password* if the app needs it, and ⌫ to erase in the app's field.
-- **Two-factor code**: once *One-time codes (TOTP)* is enabled in the settings, entries with a TOTP show a *Code (N s)* button next to *Password*; it is highlighted when the app's field is numeric.
+- **Two-factor code**: once *One-time codes (TOTP)* is enabled in the settings, entries with a TOTP show a *Code (N s)* button next to *Password*; it is highlighted when the app's field is numeric. Code fields show the Jolla number or phone pad, where swiping between layouts is not possible: tap the **KeePass key** at the bottom left of the pad to open the KeePass layout; once the code is typed, the pad comes back. (The package adds this key to the `jolla-keyboard` pad files and puts it back at boot after a Sailfish OS update; uninstalling restores the original files.)
 - **New password**: tap **+**, adjust length and character types, tap **Use**: the password is typed into the field and the save page opens. Check title, username and URL, then *Save to KeePass*.
 - Tap the keyboard icon (top left) to go back to your previous keyboard. Closing the keyboard also returns to it.
 

@@ -12,6 +12,11 @@ after listing the changes under “Unreleased”.
   button types the current code of entries that have one (`otp` URI of KeePassXC / KeePassDX, KeePass 2
   `TimeOtp-*` fields, legacy `TOTP Seed` / `TOTP Settings`; SHA-1/256/512, Steam). The secret key stays in
   the service; only the code is sent to the keyboard (new `Totp` and `SetTotpEnabled` D-Bus methods).
+- KeePass key in the Jolla number and phone pads: code fields open one of these pads, which allow no
+  layout change; a KeePass key (bottom left) now opens the KeePass layout, and typing the code returns to
+  the pad. The package adds a few marked lines to the pad files of `jolla-keyboard`
+  (`/usr/libexec/keepass-kbd/numpad-patch`); `keepass-kbd-numpad.service` puts them back at boot after a
+  Sailfish OS update, and uninstalling restores the original files.
 
 ## [1.0.2] - 2026-11-20
 ### Changed
