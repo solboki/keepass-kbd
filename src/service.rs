@@ -169,6 +169,12 @@ fn log_error(msg: &str) {
     }
 }
 
+/// Icône des notifications : celle du paquet si elle est installée, sinon une icône du thème.
+fn notification_icon() -> String {
+    const INSTALLED: &str = "/usr/share/keepass-kbd/keepass-kbd.png";
+    if std::path::Path::new(INSTALLED).exists() { INSTALLED.into() } else { "icon-lock-information".into() }
+}
+
 /// Notification système (bandeau en haut de l'écran sous Sailfish).
 fn notify_blocking(conn: &zbus::blocking::Connection, summary: &str, body: &str) {
     use std::collections::HashMap;
@@ -177,12 +183,15 @@ fn notify_blocking(conn: &zbus::blocking::Connection, summary: &str, body: &str)
     hints.insert("x-nemo-preview-summary", Value::from(summary));
     hints.insert("x-nemo-preview-body", Value::from(body));
     hints.insert("urgency", Value::U8(1));
+    let icon = notification_icon();
+    hints.insert("x-nemo-icon", Value::from(icon.as_str()));
+    hints.insert("x-nemo-preview-icon", Value::from(icon.as_str()));
     let r = conn.call_method(
         Some("org.freedesktop.Notifications"),
         "/org/freedesktop/Notifications",
         Some("org.freedesktop.Notifications"),
         "Notify",
-        &("Clavier KeePass", 0u32, "icon-lock-information", summary, body, Vec::<&str>::new(), hints, 5000i32),
+        &("Clavier KeePass", 0u32, icon.as_str(), summary, body, Vec::<&str>::new(), hints, 5000i32),
     );
     if let Err(e) = r {
         eprintln!("notification impossible : {e}");

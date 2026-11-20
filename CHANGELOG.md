@@ -6,6 +6,14 @@ Incrémenter avec `scripts/bump-version.sh patch|minor|major`.
 
 ## [Non publié]
 
+## [0.10.0] - 2026-11-20
+### Ajouté
+- Icône du Clavier KeePass (Boris Solodki), utilisée pour les notifications
+  (`assets/`, installée dans `/usr/share/keepass-kbd/` et `/usr/share/icons/hicolor/86x86/apps/`).
+### Modifié
+- Générateur : « Insérer » et « Enregistrer… » fusionnés en un bouton « Utiliser », qui insère
+  le mot de passe puis ouvre la page de vérification et d'enregistrement.
+
 ## [0.9.0] - 2026-11-20
 ### Ajouté
 - Paramètres : choix du dossier des nouvelles entrées parmi ceux de la base, ou nouveau dossier

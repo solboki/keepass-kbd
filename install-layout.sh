@@ -15,4 +15,6 @@ mkdir -p "$PAGES"
 stamp "$SRC/settings/main.qml" "$PAGES/main.qml"
 install -m 644 "$SRC/settings/KeepassTextInputSettings.qml" "$PAGES/"
 install -D -m 644 "$SRC/settings/keepass-kbd.json" /usr/share/jolla-settings/entries/keepass-kbd.json
+install -D -m 644 "$SRC/assets/keepass-kbd-256.png" /usr/share/keepass-kbd/keepass-kbd.png
+install -D -m 644 "$SRC/assets/keepass-kbd-86.png" /usr/share/icons/hicolor/86x86/apps/keepass-kbd.png
 echo "Clavier KeePass $VERSION installé (disposition + Paramètres › Entrée de texte)"

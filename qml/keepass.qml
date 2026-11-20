@@ -899,25 +899,23 @@ KeyboardLayout {
                     width: parent.width
                     height: root.unit * 0.95
                     spacing: Theme.paddingSmall
-                    KpxButton {
-                        width: (parent.width - backspaceGen.width - 2 * Theme.paddingSmall) / 2; height: parent.height
-                        iconSource: "image://theme/icon-m-edit"
-                        text: "Insérer"
-                        active: root.generated.length > 0
-                        onClicked: root.commit(root.generated)
-                    }
                     KpxBackspaceButton {
                         id: backspaceGen
                         width: root.unit * 1.15; height: parent.height
                         onErase: root.appBackspace()
                     }
+                    // « Utiliser » : insère le mot de passe dans le champ, puis ouvre
+                    // la page de vérification des détails et d'enregistrement.
                     KpxButton {
-                        width: (parent.width - backspaceGen.width - 2 * Theme.paddingSmall) / 2; height: parent.height
+                        width: parent.width - backspaceGen.width - Theme.paddingSmall; height: parent.height
                         iconSource: "image://theme/icon-m-acknowledge"
-                        text: "Enregistrer…"
+                        text: "Utiliser"
                         highlighted: true
                         active: root.generated.length > 0
-                        onClicked: root.openSaveForm()
+                        onClicked: {
+                            root.commit(root.generated)
+                            root.openSaveForm()
+                        }
                     }
                 }
             }

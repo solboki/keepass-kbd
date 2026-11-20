@@ -8,4 +8,6 @@ rm -f "$DEST/keepass.qml" "$DEST/KpxButton.qml" "$DEST/KpxMiniKeyboard.qml" "$DE
 rm -f /usr/share/maliit/plugins/com/jolla/handlers/KeepassInputHandler.qml
 rm -rf /usr/share/jolla-settings/pages/keepass-kbd
 rm -f /usr/share/jolla-settings/entries/keepass-kbd.json
+rm -rf /usr/share/keepass-kbd
+rm -f /usr/share/icons/hicolor/86x86/apps/keepass-kbd.png
 echo "Disposition et page Paramètres retirées"
