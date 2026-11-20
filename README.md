@@ -18,6 +18,7 @@ no import, no second vault, and changes made elsewhere (KeePassXC, KeePassDX…)
 - **Password generator** (8–64 characters, lowercase / uppercase / digits / symbols), then **save** the new login: title and username are pre-filled from the current app or page, and the entry goes to a configurable folder (`keepass-kbd` by default).
 - **Safe writes** — before writing, the database is re-read and fully verified, a local backup is made, concurrent changes are detected and the file is replaced atomically. A system notification confirms the result.
 - **One-time codes (TOTP)**, optional — a *Code* button types the current two-factor code of the entry (`otp` field of KeePassXC / KeePassDX, `TimeOtp-*` fields of KeePass 2, legacy `TOTP Seed`; SHA-1/256/512, Steam). Off by default; the secret key never leaves the service.
+- **Add a two-factor code** to an entry, from the keyboard or the settings: type or paste the secret key or the `otpauth://` link, pick a screenshot of the site's QR code, or scan it with the camera (settings). The current code is shown so you can finish the activation on the site; it is saved in the entry's `otp` field (KeePassXC / KeePassDX format), the previous version going to the entry history.
 - **Automatic reload** when the `.kdbx` file changes on disk.
 - **Lock policy** — ask for the master password again on every restart, every 24 h / 1 h / 30 min / 5 min, or on every wake-up.
 - The master password is typed on the layout's **own mini keyboard**: it is never sent to the app in the foreground.
@@ -48,12 +49,14 @@ no import, no second vault, and changes made elsewhere (KeePassXC, KeePassDX…)
 - Type your master password on the mini keyboard, then ✓. Tap the eye to show it; tap anywhere in the text to move the cursor.
 - **Fill a login**: tap the entry (suggested entries are starred). Use *Username* / *Password* if the app needs it, and ⌫ to erase in the app's field.
 - **Two-factor code**: once *One-time codes (TOTP)* is enabled in the settings, entries with a TOTP show a *Code (N s)* button next to *Password*; it is highlighted when the app's field is numeric. Code fields show the Jolla number or phone pad, where swiping between layouts is not possible: tap the **KeePass key** at the bottom left of the pad to open the KeePass layout; once the code is typed, the pad comes back. (The package adds this key to the `jolla-keyboard` pad files and puts it back at boot after a Sailfish OS update; uninstalling restores the original files.)
+- **Add a two-factor code**: when a site shows its QR code, take a screenshot. Choose the entry, tap **+ Code** (third button, shown for entries without a code), then *Screenshot* and pick the image — or *Paste* / type the secret key. Check the code shown, type it on the site with *Type the code* if asked, then *Save*. In the settings, *Add a one-time code to an entry* does the same and can also scan a QR code shown on another screen with the camera; it can also replace an existing code.
 - **New password**: tap **+**, adjust length and character types, tap **Use**: the password is typed into the field and the save page opens. Check title, username and URL, then *Save to KeePass*.
 - Tap the keyboard icon (top left) to go back to your previous keyboard. Closing the keyboard also returns to it.
 
 ## Security
 
-- The service only answers the keyboard process (`/usr/bin/maliit-server`); the Settings app may change settings and lock, never read entries.
+- The service only answers the keyboard process (`/usr/bin/maliit-server`); the Settings app may change settings and lock, and for one-time codes list entry titles and usernames and add a code — it never reads passwords or keys.
+- Camera scans are written to the session's runtime folder (in memory) and deleted as soon as they are read. Screenshots of QR codes stay in your gallery: delete them once the code is saved.
 - The service's D-Bus name is exclusive and cannot be taken over by another process.
 - Secrets are kept in memory only while the database is unlocked and are zeroised when no longer needed; nothing is written to disk except the database itself and its backups (`~/.local/share/keepass-kbd/backups`).
 - Writes are refused if rewriting the database would lose anything the library does not understand (two harmless differences are tolerated: the obsolete KDBX 3 `HeaderHash` and an explicit default `QualityCheck`).
@@ -110,7 +113,8 @@ Corrections and new languages are welcome — please open an issue or a pull req
 
 - [keepass-rs](https://github.com/sseemayer/keepass-rs) — KDBX reading and writing (MIT)
 - [zbus](https://github.com/dbus2/zbus) — D-Bus (MIT)
-- rust-argon2, sha1, sha2, rand, zeroize, serde, chrono, uuid (MIT / Apache-2.0)
+- [rqrr](https://github.com/WanzenBug/rqrr) — QR code reading (MIT / Apache-2.0); [image](https://github.com/image-rs/image) — PNG / JPEG decoding (MIT / Apache-2.0)
+- rust-argon2, sha1, sha2, rand, zeroize, serde, chrono, uuid, blocking (MIT / Apache-2.0)
 - Sailfish OS, Silica and Maliit — Jolla; Qt 5 — The Qt Company
 - [FUTO Keyboard for Sailfish](https://github.com/solboki/futo-keyboard-sailfish) — current site and app detection
 - KeePass format: the KeePass project by Dominik Reichl

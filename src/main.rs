@@ -3,6 +3,7 @@ mod generator;
 mod i18n;
 mod service;
 mod titles;
+mod qr;
 mod totp;
 mod vault;
 

@@ -36,6 +36,12 @@ KeyboardLayout {
     property string saveTitle: ""
     property string saveUser: ""
     property string saveUrl: ""
+    // Ajout d'un code à usage unique à une entrée (modes "otp" et "otpimages").
+    property var otpEntry: null              // entrée concernée {id,title,username,has_totp}
+    property string otpInput: ""             // clé secrète ou lien otpauth:// (saisi, collé ou lu)
+    property bool showOtpKey: false
+    property var otpPreview: null            // réponse de OtpPreview : {ok, issuer, account, code, remaining} ou {ok:false, error}
+    property var imageItems: []              // images récentes où chercher un QR code
     property string editing: ""              // "master", "query", "title", "user", "url"
 
     // Langue du téléphone (anglais par défaut) et traduction des textes.
@@ -86,6 +92,7 @@ KeyboardLayout {
         masterCursor = -1; titleCursor = -1; userCursor = -1; urlCursor = -1
         generated = ""
         saveTitle = ""; saveUser = ""; saveUrl = ""
+        otpInput = ""; otpCursor = -1; otpPreview = null; showOtpKey = false; imageItems = []
         autofill.stop()
     }
 
@@ -272,6 +279,10 @@ KeyboardLayout {
         daemon.typedCall("Search", [{ "type": "s", "value": query }, { "type": "i", "value": 60 }],
                          function(json) {
                              try { entries = JSON.parse(json) } catch (e) { entries = [] }
+                             if (selected) {
+                                 for (var i = 0; i < entries.length; ++i)
+                                     if (entries[i].id === selected.id) { selected = entries[i]; break }
+                             }
                              buildModel()
                          }, function() { refreshStatus() })
     }
@@ -403,21 +414,23 @@ KeyboardLayout {
     property int titleCursor: -1
     property int userCursor: -1
     property int urlCursor: -1
+    property int otpCursor: -1
     property bool showGenerated: false
 
     function fieldValue(k) {
         return k === "master" ? masterPassword : k === "title" ? saveTitle
-             : k === "user" ? saveUser : k === "url" ? saveUrl : ""
+             : k === "user" ? saveUser : k === "url" ? saveUrl : k === "otp" ? otpInput : ""
     }
     function setFieldValue(k, v) {
         if (k === "master") masterPassword = v
         else if (k === "title") saveTitle = v
         else if (k === "user") saveUser = v
         else if (k === "url") saveUrl = v
+        else if (k === "otp") otpInput = v
     }
     function cursorOf(k) {
         var c = k === "master" ? masterCursor : k === "title" ? titleCursor
-              : k === "user" ? userCursor : k === "url" ? urlCursor : -1
+              : k === "user" ? userCursor : k === "url" ? urlCursor : k === "otp" ? otpCursor : -1
         var len = fieldValue(k).length
         return c < 0 ? len : Math.min(c, len)
     }
@@ -426,6 +439,7 @@ KeyboardLayout {
         else if (k === "title") titleCursor = c
         else if (k === "user") userCursor = c
         else if (k === "url") urlCursor = c
+        else if (k === "otp") otpCursor = c
     }
 
     function editText(t) {
@@ -434,6 +448,7 @@ KeyboardLayout {
         setFieldValue(editing, v.slice(0, c) + t + v.slice(c))
         setCursor(editing, c + t.length)
         if (editing === "master") statusMessage = ""
+        if (editing === "otp") otpPreviewTimer.restart()
     }
 
     function editBackspace() {
@@ -442,6 +457,7 @@ KeyboardLayout {
         if (c === 0) return
         setFieldValue(editing, v.slice(0, c - 1) + v.slice(c))
         setCursor(editing, c - 1)
+        if (editing === "otp") otpPreviewTimer.restart()
     }
 
     function editAccept() {
@@ -450,6 +466,7 @@ KeyboardLayout {
         else if (editing === "title") startEditing("user")
         else if (editing === "user") startEditing("url")
         else if (editing === "url") { typing = false; saveEntry() }
+        else if (editing === "otp") { typing = false; updateOtpPreview() }
     }
 
     function startEditing(key) {
@@ -460,8 +477,9 @@ KeyboardLayout {
     Timer {
         id: ensureFieldTimer
         interval: 50
-        onTriggered: saveForm.ensureVisible(root.editing === "title" ? titleField
-                                            : root.editing === "user" ? userField : urlField)
+        onTriggered: if (root.mode === "save")
+                         saveForm.ensureVisible(root.editing === "title" ? titleField
+                                                : root.editing === "user" ? userField : urlField)
     }
 
     // ── Préremplissage du formulaire d'enregistrement ─────────────────
@@ -506,6 +524,105 @@ KeyboardLayout {
         } else if (saveTitle === "") {
             startEditing("title")
         }
+    }
+
+    // ── Ajout d'un code à usage unique (TOTP) à une entrée ────────────
+    // Clé secrète ou lien otpauth:// saisi, collé, ou lu dans le QR code d'une capture d'écran.
+    // Le service vérifie la saisie et donne le code actuel (aperçu), puis l'enregistre dans
+    // le champ « otp » de l'entrée (format KeePassXC / KeePassDX).
+    function openOtpForm(entry) {
+        if (!entry) return
+        clearSecrets()
+        otpEntry = entry
+        statusMessage = ""
+        mode = "otp"
+        // Ouverture sur les boutons (Coller, Capture d'écran) : le mini-clavier ne s'affiche
+        // qu'en touchant le champ, sinon il les cache.
+        typing = false; editing = ""
+    }
+
+    function updateOtpPreview() {
+        if (!otpEntry || otpInput.trim() === "") { otpPreview = null; return }
+        daemon.typedCall("OtpPreview", [{ "type": "s", "value": otpInput },
+                                         { "type": "s", "value": otpEntry.title || "" },
+                                         { "type": "s", "value": otpEntry.username || "" }],
+                         function(json) {
+                             var r = null
+                             try { r = JSON.parse(json) } catch (e) {}
+                             if (root.mode === "otp") root.otpPreview = r
+                         }, function() { root.otpPreview = { ok: false, error: root.t("service unavailable") } })
+    }
+    Timer {
+        id: otpPreviewTimer
+        interval: 400
+        onTriggered: root.updateOtpPreview()
+    }
+    // Le code de l'aperçu suit l'horloge (utile pour terminer l'activation sur le site).
+    Timer {
+        interval: 1000
+        repeat: true
+        running: root.mode === "otp" && root.otpPreview !== null && root.otpPreview.ok === true
+                 && MInputMethodQuick.active
+        onTriggered: root.updateOtpPreview()
+    }
+
+    function pasteOtp() {
+        var c = String(Clipboard.text || "").trim()
+        if (c === "") { statusMessage = t("The clipboard is empty"); return }
+        statusMessage = ""
+        otpInput = c; otpCursor = -1
+        typing = false
+        updateOtpPreview()
+    }
+
+    function openImages() {
+        typing = false
+        statusMessage = ""
+        mode = "otpimages"
+        daemon.typedCall("RecentImages", [{ "type": "i", "value": 12 }], function(json) {
+            try { root.imageItems = JSON.parse(json) } catch (e) { root.imageItems = [] }
+        }, function() { root.imageItems = []; root.statusMessage = root.t("service unavailable") })
+    }
+
+    function readImage(path) {
+        if (busyText !== "") return
+        busyText = t("Reading the QR code…")
+        daemon.typedCall("OtpFromImage", [{ "type": "s", "value": path }], function(json) {
+            root.busyText = ""
+            var r = {}
+            try { r = JSON.parse(json) } catch (e) {}
+            if (r.ok) {
+                root.otpInput = r.uri; root.otpCursor = -1
+                root.otpPreview = r
+                root.imageItems = []
+                root.statusMessage = ""
+                root.mode = "otp"
+            } else {
+                root.statusMessage = r.error || root.t("no QR code found")
+            }
+        }, function() { root.busyText = ""; root.statusMessage = root.t("service unavailable") })
+    }
+
+    function saveOtp() {
+        if (!otpEntry || !otpPreview || !otpPreview.ok || busyText !== "") return
+        busyText = t("Saving to the database…")
+        daemon.typedCall("SetOtp", [{ "type": "s", "value": otpEntry.id },
+                                     { "type": "s", "value": otpInput },
+                                     { "type": "b", "value": otpEntry.has_totp === true }],
+                         function(json) {
+                             root.busyText = ""
+                             var r = {}
+                             try { r = JSON.parse(json) } catch (e) {}
+                             if (r.ok) {
+                                 // La notification système confirme ; l'entrée reste choisie et
+                                 // son bouton « Code » apparaît au rechargement de la liste.
+                                 root.clearSecrets()
+                                 root.mode = "list"; root.typing = false; root.editing = ""
+                                 root.statusMessage = root.t("Saving the one-time code…")
+                             } else {
+                                 root.statusMessage = r.error || root.t("save failed")
+                             }
+                         }, function() { root.busyText = ""; root.statusMessage = root.t("service unavailable") })
     }
 
     // Couleur d'avatar stable dérivée du titre.
@@ -588,6 +705,7 @@ KeyboardLayout {
             root.clearSecrets()
             root.trackedUsername = ""
             root.typing = false
+            if (root.mode === "otp" || root.mode === "otpimages") root.mode = "list"
             if (canvas.activeIndex === root.layoutIndex) root.backToKeyboard()
         }
     }
@@ -630,7 +748,9 @@ KeyboardLayout {
                 Icon {
                     anchors.verticalCenter: parent.verticalCenter
                     source: root.mode === "locked" ? "image://theme/icon-m-device-lock"
-                          : root.mode === "pick" ? "image://theme/icon-m-folder" : "image://theme/icon-m-keys"
+                          : root.mode === "pick" ? "image://theme/icon-m-folder"
+                          : root.mode === "otp" || root.mode === "otpimages" ? "image://theme/icon-m-timer"
+                          : "image://theme/icon-m-keys"
                     width: Theme.iconSizeSmallPlus; height: width
                     color: Theme.highlightColor
                 }
@@ -645,6 +765,8 @@ KeyboardLayout {
                         text: root.mode === "generate" ? root.t("New password")
                               : root.mode === "save" ? root.t("Save to KeePass")
                               : root.mode === "pick" ? root.t("Choose a KeePass database")
+                              : root.mode === "otp" ? root.t("One-time code")
+                              : root.mode === "otpimages" ? root.t("Image with the QR code")
                               : "KeePass"
                     }
                     Label {
@@ -656,6 +778,8 @@ KeyboardLayout {
                         text: root.busyText !== "" ? root.busyText
                               : root.statusMessage !== "" ? root.statusMessage
                               : root.mode === "pick" ? root.pickPath
+                              : (root.mode === "otp" || root.mode === "otpimages") && root.otpEntry
+                                ? (root.otpEntry.title || root.t("(untitled)"))
                               : root.mode === "locked" ? root.t("Database locked")
                               : root.mode === "missing" ? root.t("Database not found")
                               : root.mode === "offline" ? root.t("Service stopped")
@@ -671,19 +795,21 @@ KeyboardLayout {
                 // L'engrenage reste le dernier élément : toujours aligné sur le bord droit.
                 KpxButton {
                     visible: root.mode === "list" || root.mode === "generate" || root.mode === "save"
-                             || root.mode === "pick"
+                             || root.mode === "pick" || root.mode === "otp" || root.mode === "otpimages"
                     width: root.unit * 1.05; height: root.unit * 0.8
                     flat: true
                     iconSource: root.mode === "list" ? "image://theme/icon-m-add" : "image://theme/icon-m-back"
                     onClicked: {
                         root.statusMessage = ""
                         if (root.mode === "pick") { root.mode = "missing"; root.pickItems = []; root.refreshStatus() }
+                        else if (root.mode === "otpimages") { root.imageItems = []; root.mode = "otp" }
                         else if (root.mode === "list") { root.mode = "generate"; root.typing = false; root.generate() }
                         else { root.clearSecrets(); root.mode = "list"; root.typing = false; root.editing = "" }
                     }
                 }
                 KpxButton {
                     visible: root.mode === "list" || root.mode === "generate" || root.mode === "save"
+                             || root.mode === "otp" || root.mode === "otpimages"
                     width: root.unit * 1.05; height: root.unit * 0.8
                     flat: true
                     iconSource: "image://theme/icon-m-device-lock"
@@ -875,7 +1001,9 @@ KeyboardLayout {
                     width: parent.width
                     height: root.unit * 0.95
                     spacing: Theme.paddingSmall
-                    readonly property int buttons: root.showTotp ? 3 : 2
+                    // 3e bouton (option TOTP) : « Code » si l'entrée en a un, sinon « + Code » pour l'ajouter.
+                    readonly property bool otpSlot: root.totpEnabled && root.selected !== null
+                    readonly property int buttons: otpSlot ? 3 : 2
                     readonly property real buttonWidth: (width - backspaceList.width - buttons * Theme.paddingSmall) / buttons
                     KpxButton {
                         width: parent.buttonWidth; height: parent.height
@@ -900,6 +1028,13 @@ KeyboardLayout {
                         text: root.t("Code (%1 s)", root.totpRemaining)
                         highlighted: root.numberField && !root.passwordField
                         onClicked: root.insertTotp()
+                    }
+                    KpxButton {
+                        visible: parent.otpSlot && !root.showTotp
+                        width: parent.buttonWidth; height: parent.height
+                        iconSource: "image://theme/icon-m-add"
+                        text: root.t("Code")
+                        onClicked: root.openOtpForm(root.selected)
                     }
                     KpxBackspaceButton {
                         id: backspaceList
@@ -1089,6 +1224,155 @@ KeyboardLayout {
                 VerticalScrollDecorator {}
             }
 
+            // ── Code à usage unique : saisie, collage ou capture d'écran ──
+            SilicaFlickable {
+                id: otpForm
+                visible: root.mode === "otp"
+                anchors { top: parent.top; left: parent.left; right: parent.right
+                          bottom: root.typing ? miniKeyboard.top : parent.bottom
+                          leftMargin: Theme.paddingMedium; rightMargin: Theme.paddingMedium
+                          bottomMargin: Theme.paddingSmall }
+                clip: true
+                contentHeight: otpColumn.height
+                boundsBehavior: Flickable.StopAtBounds
+
+                Column {
+                    id: otpColumn
+                    width: parent.width
+                    spacing: Theme.paddingSmall
+
+                    KpxLineField {
+                        width: parent.width
+                        label: root.t("Secret key or otpauth:// link")
+                        placeholder: root.t("Key shown by the site")
+                        value: root.otpInput
+                        secret: true
+                        showSecret: root.showOtpKey
+                        editing: root.typing && root.editing === "otp"
+                        error: root.otpPreview !== null && root.otpPreview.ok !== true
+                        cursorPosition: root.cursorOf("otp")
+                        onCursorRequested: root.otpCursor = position
+                        onClicked: root.startEditing("otp")
+                        onSecretToggled: root.showOtpKey = !root.showOtpKey
+                    }
+                    Row {
+                        visible: !root.typing
+                        width: parent.width
+                        height: root.unit * 0.8
+                        spacing: Theme.paddingSmall
+                        KpxButton {
+                            width: (parent.width - parent.spacing) / 2; height: parent.height
+                            iconSource: "image://theme/icon-m-clipboard"
+                            text: root.t("Paste")
+                            onClicked: root.pasteOtp()
+                        }
+                        KpxButton {
+                            width: (parent.width - parent.spacing) / 2; height: parent.height
+                            iconSource: "image://theme/icon-m-image"
+                            text: root.t("Screenshot")
+                            onClicked: root.openImages()
+                        }
+                    }
+                    // Aperçu : émetteur, compte et code actuel, ou l'erreur.
+                    Rectangle {
+                        visible: !root.typing
+                        width: parent.width
+                        height: root.unit * 1.3
+                        radius: Theme.paddingMedium
+                        color: Theme.rgba(Theme.primaryColor, 0.07)
+                        border.width: 1
+                        border.color: root.otpPreview && root.otpPreview.ok ? Theme.rgba(Theme.highlightColor, 0.4)
+                                                                            : "transparent"
+                        Column {
+                            anchors { left: parent.left; right: parent.right; verticalCenter: parent.verticalCenter
+                                      leftMargin: Theme.paddingMedium; rightMargin: Theme.paddingMedium }
+                            Label {
+                                width: parent.width
+                                horizontalAlignment: Text.AlignHCenter
+                                truncationMode: TruncationMode.Fade
+                                textFormat: Text.PlainText
+                                font.pixelSize: Theme.fontSizeExtraSmall
+                                color: root.otpPreview && root.otpPreview.ok ? Theme.secondaryHighlightColor : Theme.secondaryColor
+                                wrapMode: root.otpPreview && !root.otpPreview.ok ? Text.Wrap : Text.NoWrap
+                                text: !root.otpPreview ? root.t("Type or paste the key, or choose a screenshot of the QR code")
+                                      : !root.otpPreview.ok ? (root.otpPreview.error || "")
+                                      : [root.otpPreview.issuer, root.otpPreview.account].filter(function(x) { return !!x }).join("  ·  ")
+                            }
+                            Label {
+                                visible: root.otpPreview !== null && root.otpPreview.ok === true
+                                width: parent.width
+                                horizontalAlignment: Text.AlignHCenter
+                                font.family: "monospace"
+                                font.pixelSize: Theme.fontSizeLarge
+                                color: Theme.highlightColor
+                                text: root.otpPreview && root.otpPreview.ok
+                                      ? String(root.otpPreview.code).replace(/^(\d{3})(\d{3})$/, "$1 $2")
+                                        + "  ·  " + root.otpPreview.remaining + " s"
+                                      : ""
+                            }
+                        }
+                    }
+                    Row {
+                        visible: !root.typing
+                        width: parent.width
+                        height: root.unit * 0.9
+                        spacing: Theme.paddingSmall
+                        // Taper le code actuel : pour terminer l'activation sur le site.
+                        KpxButton {
+                            width: (parent.width - parent.spacing) * 0.4; height: parent.height
+                            iconSource: "image://theme/icon-m-timer"
+                            text: root.t("Type the code")
+                            active: root.otpPreview !== null && root.otpPreview.ok === true
+                            onClicked: root.commit(String(root.otpPreview.code))
+                        }
+                        KpxButton {
+                            width: (parent.width - parent.spacing) * 0.6; height: parent.height
+                            iconSource: "image://theme/icon-m-acknowledge"
+                            text: root.otpEntry && root.otpEntry.has_totp ? root.t("Replace the code") : root.t("Save")
+                            highlighted: true
+                            active: root.otpPreview !== null && root.otpPreview.ok === true && root.busyText === ""
+                            onClicked: root.saveOtp()
+                        }
+                    }
+                }
+                VerticalScrollDecorator {}
+            }
+
+            // ── Choix de l'image (capture d'écran du QR code) ─────────
+            SilicaGridView {
+                id: imageGrid
+                visible: root.mode === "otpimages"
+                anchors.fill: parent
+                clip: true
+                model: root.imageItems
+                cellWidth: width / 4
+                cellHeight: cellWidth * 1.5
+                delegate: BackgroundItem {
+                    width: imageGrid.cellWidth
+                    height: imageGrid.cellHeight
+                    onClicked: root.readImage(modelData.path)
+                    Image {
+                        anchors { fill: parent; margins: Theme.paddingSmall / 2 }
+                        source: "file://" + modelData.path
+                        sourceSize.width: imageGrid.cellWidth
+                        fillMode: Image.PreserveAspectCrop
+                        asynchronous: true
+                        clip: true
+                        opacity: parent.down ? 0.6 : 1.0
+                    }
+                }
+                Label {
+                    visible: imageGrid.count === 0
+                    anchors.centerIn: parent
+                    width: parent.width - 2 * Theme.paddingLarge
+                    wrapMode: Text.Wrap
+                    horizontalAlignment: Text.AlignHCenter
+                    color: Theme.secondaryColor
+                    text: root.t("No recent screenshot or photo. Take a screenshot of the QR code, then come back here.")
+                }
+                VerticalScrollDecorator {}
+            }
+
             // ── Base introuvable / non choisie / service arrêté ───────
             Column {
                 visible: root.mode === "missing" || root.mode === "offline"
@@ -1168,12 +1452,13 @@ KeyboardLayout {
 
             KpxMiniKeyboard {
                 id: miniKeyboard
-                visible: root.mode === "locked" || (root.typing && (root.mode === "list" || root.mode === "save"))
+                visible: root.mode === "locked"
+                         || (root.typing && (root.mode === "list" || root.mode === "save" || root.mode === "otp"))
                 anchors.bottom: parent.bottom
                 anchors.bottomMargin: Theme.paddingSmall
                 width: parent.width
                 rowHeight: root.unit * 0.8
-                enterLabel: root.mode === "locked" ? root.t("OK")
+                enterLabel: root.mode === "locked" || root.mode === "otp" ? root.t("OK")
                             : root.mode === "save" ? (root.editing === "url" ? root.t("Save") : root.t("Next"))
                             : root.t("Close")
                 lang: root.lang

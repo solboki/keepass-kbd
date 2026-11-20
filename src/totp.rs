@@ -134,6 +134,92 @@ fn parse_uri(uri: &str) -> Option<Spec> {
     Spec::new(secret?, period, digits, algorithm, steam)
 }
 
+/// Erreurs de [`normalize_input`] (texte anglais, traduit par `i18n::tr`).
+pub const ERR_INVALID: &str = "this is not a valid one-time code key";
+pub const ERR_MIGRATION: &str = "Google Authenticator exports (otpauth-migration) are not supported";
+pub const ERR_HOTP: &str = "counter-based codes (HOTP) are not supported";
+
+/// Code saisi, collé ou lu dans un QR code → URI `otpauth://totp/…` à enregistrer dans le
+/// champ `otp` (format de KeePassXC / KeePassDX). Accepte une URI otpauth (gardée telle quelle)
+/// ou une clé secrète en base32 (espaces, tirets et minuscules admis) ; `issuer` et `account`
+/// servent alors d'étiquette (titre et identifiant de l'entrée en général).
+pub fn normalize_input(input: &str, issuer: &str, account: &str) -> Result<Zeroizing<String>, &'static str> {
+    let input = input.trim();
+    let lower = input.get(..30).unwrap_or(input).to_ascii_lowercase();
+    if lower.starts_with("otpauth-migration:") {
+        return Err(ERR_MIGRATION);
+    }
+    if lower.starts_with("otpauth://hotp") {
+        return Err(ERR_HOTP);
+    }
+    if lower.starts_with("otpauth://") {
+        return match parse_uri(input) {
+            Some(_) => Ok(Zeroizing::new(input.to_string())),
+            None => Err(ERR_INVALID),
+        };
+    }
+    let secret: Zeroizing<String> = Zeroizing::new(
+        input
+            .chars()
+            .filter(|c| !matches!(c, ' ' | '-' | '=' | '\t' | '\n' | '\r'))
+            .map(|c| c.to_ascii_uppercase())
+            .collect(),
+    );
+    // 8 octets (64 bits) au moins : en dessous, c'est sans doute une saisie incomplète.
+    if decode_base32(&secret).is_none_or(|k| k.len() < 8) {
+        return Err(ERR_INVALID);
+    }
+    let (issuer, account) = (issuer.trim(), account.trim());
+    let label = match (issuer.is_empty(), account.is_empty()) {
+        (false, false) => format!("{issuer}:{account}"),
+        (false, true) => issuer.to_string(),
+        (true, false) => account.to_string(),
+        (true, true) => "KeePass".to_string(),
+    };
+    let mut uri = format!("otpauth://totp/{}?secret={}&period=30&digits=6", percent_encode(&label), secret.as_str());
+    if !issuer.is_empty() {
+        uri.push_str("&issuer=");
+        uri.push_str(&percent_encode(issuer));
+    }
+    Ok(Zeroizing::new(uri))
+}
+
+/// Description d'une URI otpauth pour l'aperçu : émetteur, compte et paramètres.
+pub struct Described {
+    pub spec: Spec,
+    pub issuer: String,
+    pub account: String,
+}
+
+pub fn describe(uri: &str) -> Option<Described> {
+    let spec = parse_uri(uri)?;
+    let rest = uri.split_once("://")?.1;
+    let (path, query) = rest.split_once('?').unwrap_or((rest, ""));
+    let label = percent_decode(path.split_once('/').map_or("", |(_, l)| l));
+    let (mut issuer, account) = match label.split_once(':') {
+        Some((i, a)) => (i.trim().to_string(), a.trim().to_string()),
+        None => (String::new(), label.trim().to_string()),
+    };
+    for pair in query.split('&') {
+        if let Some(v) = pair.strip_prefix("issuer=") {
+            issuer = percent_decode(v).trim().to_string();
+        }
+    }
+    Some(Described { spec, issuer, account })
+}
+
+fn percent_encode(s: &str) -> String {
+    let mut out = String::new();
+    for b in s.bytes() {
+        if b.is_ascii_alphanumeric() || matches!(b, b'-' | b'.' | b'_' | b'~' | b'@') {
+            out.push(b as char);
+        } else {
+            out.push_str(&format!("%{b:02X}"));
+        }
+    }
+    out
+}
+
 fn percent_decode(s: &str) -> Zeroizing<String> {
     let b = s.as_bytes();
     let mut out = Vec::with_capacity(b.len());
@@ -300,6 +386,40 @@ mod tests {
         let raw = spec(&[("otp", "JBSW Y3DP EHPK 3PXP")]).unwrap();
         assert_eq!(raw.digits, 6);
         assert_eq!(raw.code_at(100).1, 20);
+    }
+
+    #[test]
+    fn user_input() {
+        // Clé en base32 telle qu'affichée par les sites : groupes de 4, minuscules.
+        let uri = normalize_input(" jbsw y3dp ehpk 3pxp ", "Amazon", "boris@example.org").unwrap();
+        assert_eq!(
+            uri.as_str(),
+            "otpauth://totp/Amazon%3Aboris@example.org?secret=JBSWY3DPEHPK3PXP&period=30&digits=6&issuer=Amazon"
+        );
+        let d = describe(&uri).unwrap();
+        assert_eq!((d.issuer.as_str(), d.account.as_str(), d.spec.digits, d.spec.period), ("Amazon", "boris@example.org", 6, 30));
+        // Le code calculé depuis l'URI créée est celui de la clé.
+        let direct = spec(&[("otp", "JBSWY3DPEHPK3PXP")]).unwrap();
+        assert_eq!(spec(&[("otp", &uri)]).unwrap().code_at(1234), direct.code_at(1234));
+        // Étiquette sans titre ni identifiant.
+        assert!(normalize_input("JBSWY3DPEHPK3PXP", "", "").unwrap().starts_with("otpauth://totp/KeePass?"));
+        // URI d'un QR code : gardée telle quelle.
+        let qr = "otpauth://totp/GitHub:boris?secret=JBSWY3DPEHPK3PXP&issuer=GitHub&digits=8";
+        assert_eq!(normalize_input(qr, "x", "y").unwrap().as_str(), qr);
+        let d = describe(qr).unwrap();
+        assert_eq!((d.issuer.as_str(), d.account.as_str(), d.spec.digits), ("GitHub", "boris", 8));
+        let d = describe("otpauth://totp/Mon%20compte?secret=JBSWY3DPEHPK3PXP").unwrap();
+        assert_eq!((d.issuer.as_str(), d.account.as_str()), ("", "Mon compte"));
+    }
+
+    #[test]
+    fn user_input_rejected() {
+        assert_eq!(normalize_input("", "a", "b").err(), Some(ERR_INVALID));
+        assert_eq!(normalize_input("JBSWY3DP", "a", "b").err(), Some(ERR_INVALID)); // trop courte
+        assert_eq!(normalize_input("123456", "a", "b").err(), Some(ERR_INVALID)); // un code, pas une clé
+        assert_eq!(normalize_input("otpauth-migration://offline?data=abc", "a", "b").err(), Some(ERR_MIGRATION));
+        assert_eq!(normalize_input("otpauth://hotp/x?secret=JBSWY3DPEHPK3PXP&counter=1", "a", "b").err(), Some(ERR_HOTP));
+        assert_eq!(normalize_input("otpauth://totp/x?issuer=nosecret", "a", "b").err(), Some(ERR_INVALID));
     }
 
     #[test]

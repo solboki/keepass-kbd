@@ -9,10 +9,13 @@ version = "1.1.0"
 edition = "2024"
 
 [dependencies]
+blocking = "1"
 chrono = "0.4.45"
+image = { version = "0.25", default-features = false, features = ["png", "jpeg"] }
 keepass = { version = "0.17", features = ["save_kdbx4"] }
 libc = "0.2.191"
 rand = "0.9"
+rqrr = "0.11"
 rust-argon2 = "3.0"
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.154"
@@ -21,6 +24,9 @@ sha2 = "0.11.1"
 uuid = "1.29.3"
 zbus = { version = "5", default-features = false, features = ["blocking-api", "async-io"] }
 zeroize = "1.9.2"
+
+[dev-dependencies]
+qrcode = { version = "0.14", default-features = false, features = ["image"] }
 
 [package.metadata.generate-rpm]
 name = "keepass-kbd"
@@ -45,6 +51,8 @@ assets = [
     { source = "qml/handlers/KeepassInputHandler.qml", dest = "/usr/share/maliit/plugins/com/jolla/handlers/KeepassInputHandler.qml", mode = "644" },
     { source = "target/rpm-stage/settings-main.qml", dest = "/usr/share/jolla-settings/pages/keepass-kbd/main.qml", mode = "644" },
     { source = "settings/KeepassTextInputSettings.qml", dest = "/usr/share/jolla-settings/pages/keepass-kbd/KeepassTextInputSettings.qml", mode = "644" },
+    { source = "settings/OtpEntriesPage.qml", dest = "/usr/share/jolla-settings/pages/keepass-kbd/OtpEntriesPage.qml", mode = "644" },
+    { source = "settings/OtpCameraPage.qml", dest = "/usr/share/jolla-settings/pages/keepass-kbd/OtpCameraPage.qml", mode = "644" },
     { source = "qml/KpxStrings.js", dest = "/usr/share/jolla-settings/pages/keepass-kbd/KpxStrings.js", mode = "644" },
     { source = "settings/keepass-kbd.json", dest = "/usr/share/jolla-settings/entries/keepass-kbd.json", mode = "644" },
     { source = "target/rpm-stage/settings-keepass-kbd*.qm", dest = "/usr/share/translations/", mode = "644" },

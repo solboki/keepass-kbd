@@ -617,12 +617,208 @@ impl Service {
     ) -> fdo::Result<String> {
         self.check_caller(&hdr, conn, false).await?;
         let password = Zeroizing::new(password);
+        let group = self.shared.lock().unwrap().cfg.new_entry_group.clone();
+        let done = (tr("KeePass entry saved"), tr1("“%1” was added to the database", &title));
+        Ok(self.save_in_background(conn, done, move |snap| {
+            crate::vault::prepare_add(snap, &group, &title, &username, &password, &url)
+        }))
+    }
+
+    /// Analyse un code de double authentification saisi ou collé (clé secrète ou URI otpauth)
+    /// pour l'aperçu, sans rien enregistrer. `title` et `username` (ceux de l'entrée) servent
+    /// d'étiquette à une clé seule. Renvoie {ok, issuer, account, digits, period, code,
+    /// remaining} ou {ok:false, error}. Le code affiché permet de terminer l'activation sur le site.
+    async fn otp_preview(
+        &self,
+        input: String,
+        title: String,
+        username: String,
+        #[zbus(header)] hdr: Header<'_>,
+        #[zbus(connection)] conn: &zbus::Connection,
+    ) -> fdo::Result<String> {
+        self.check_caller(&hdr, conn, true).await?;
+        let input = Zeroizing::new(input);
+        Ok(match crate::totp::normalize_input(&input, &title, &username) {
+            Ok(uri) => otp_description(&uri),
+            Err(e) => json!({"ok": false, "error": tr(e)}).to_string(),
+        })
+    }
+
+    /// Ajoute (ou remplace, si `replace`) le code à usage unique d'une entrée. Écriture en
+    /// arrière-plan comme `AddEntry`. Renvoie {ok:true, pending:true}, {ok:false, exists:true}
+    /// si l'entrée a déjà un code et que `replace` est faux, ou {ok:false, error}.
+    async fn set_otp(
+        &self,
+        id: String,
+        input: String,
+        replace: bool,
+        #[zbus(header)] hdr: Header<'_>,
+        #[zbus(connection)] conn: &zbus::Connection,
+    ) -> fdo::Result<String> {
+        self.check_caller(&hdr, conn, true).await?;
+        let input = Zeroizing::new(input);
+        let (title, username, has_totp) = {
+            let g = self.shared.lock().unwrap();
+            let v = g.vault.as_ref().ok_or_else(|| failed(tr("database locked")))?;
+            let field = |f: &str| v.field(&id, f).map_err(|_| failed(tr("entry not found")));
+            (field("title")?, field("username")?, v.totp(&id).is_ok())
+        };
+        if has_totp && !replace {
+            return Ok(json!({"ok": false, "exists": true, "error": tr("this entry already has a one-time code")}).to_string());
+        }
+        let uri = match crate::totp::normalize_input(&input, &title, &username) {
+            Ok(uri) => uri,
+            Err(e) => return Ok(json!({"ok": false, "error": tr(e)}).to_string()),
+        };
+        let done = (tr("One-time code saved"), tr1("“%1” now has a one-time code", &title));
+        Ok(self.save_in_background(conn, done, move |snap| crate::vault::prepare_set_otp(snap, &id, &uri)))
+    }
+
+    /// Lit le QR code de double authentification d'une image (capture d'écran ou photo).
+    /// Renvoie {ok, uri, issuer, account, digits, period, code, remaining} ou {ok:false, error}.
+    async fn otp_from_image(
+        &self,
+        path: String,
+        #[zbus(header)] hdr: Header<'_>,
+        #[zbus(connection)] conn: &zbus::Connection,
+    ) -> fdo::Result<String> {
+        self.check_caller(&hdr, conn, true).await?;
+        // Décodage hors de la boucle D-Bus : une grande photo prend une fraction de seconde.
+        // Les photos du scan à l'appareil photo (OtpScanPath) sont effacées dès leur lecture.
+        let decoded = blocking::unblock(move || {
+            let path = PathBuf::from(path);
+            let r = crate::qr::decode_file(&path);
+            if path == scan_path() {
+                let _ = std::fs::remove_file(&path);
+            }
+            r
+        })
+        .await;
+        let contents = match decoded {
+            Ok(c) => c,
+            Err(e) => return Ok(json!({"ok": false, "error": tr1("this image cannot be read (%1)", &e)}).to_string()),
+        };
+        let Some(content) = crate::qr::pick_otp(&contents) else {
+            return Ok(json!({"ok": false, "error": tr("no QR code found in this image")}).to_string());
+        };
+        if !content.trim().to_ascii_lowercase().starts_with("otpauth") {
+            return Ok(json!({"ok": false, "error": tr("this QR code does not contain a one-time code")}).to_string());
+        }
+        Ok(match crate::totp::normalize_input(content, "", "") {
+            Ok(uri) => {
+                let mut v: serde_json::Value = serde_json::from_str(&otp_description(&uri)).unwrap_or_default();
+                v["uri"] = json!(uri.as_str());
+                v.to_string()
+            }
+            Err(e) => json!({"ok": false, "error": tr(e)}).to_string(),
+        })
+    }
+
+    /// Fichier où la page des Paramètres enregistre les photos du scan à l'appareil photo :
+    /// dossier d'exécution de la session (en mémoire, propre à l'utilisateur).
+    async fn otp_scan_path(
+        &self,
+        #[zbus(header)] hdr: Header<'_>,
+        #[zbus(connection)] conn: &zbus::Connection,
+    ) -> fdo::Result<String> {
+        self.check_caller(&hdr, conn, true).await?;
+        Ok(scan_path().to_string_lossy().to_string())
+    }
+
+    /// Images récentes où chercher un QR code : captures d'écran puis photos, les plus récentes
+    /// d'abord. Renvoie [{path, name, mtime}].
+    async fn recent_images(
+        &self,
+        limit: i32,
+        #[zbus(header)] hdr: Header<'_>,
+        #[zbus(connection)] conn: &zbus::Connection,
+    ) -> fdo::Result<String> {
+        self.check_caller(&hdr, conn, true).await?;
+        let home = crate::config::home();
+        let mut items: Vec<(u64, PathBuf)> = Vec::new();
+        for dir in ["Pictures/Screenshots", "Pictures/Camera", "Pictures", "Downloads"] {
+            let Ok(rd) = std::fs::read_dir(home.join(dir)) else { continue };
+            for e in rd.flatten() {
+                let p = e.path();
+                let ext = p.extension().and_then(|x| x.to_str()).unwrap_or("").to_ascii_lowercase();
+                if !matches!(ext.as_str(), "png" | "jpg" | "jpeg") || !p.is_file() {
+                    continue;
+                }
+                let mtime = e
+                    .metadata()
+                    .and_then(|m| m.modified())
+                    .ok()
+                    .and_then(|t| t.duration_since(UNIX_EPOCH).ok())
+                    .map_or(0, |d| d.as_secs());
+                items.push((mtime, p));
+            }
+        }
+        items.sort_by(|a, b| b.0.cmp(&a.0));
+        items.truncate(if limit > 0 { limit as usize } else { 12 });
+        let out: Vec<_> = items
+            .into_iter()
+            .map(|(mtime, p)| {
+                json!({
+                    "path": p.to_string_lossy(),
+                    "name": p.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default(),
+                    "mtime": mtime,
+                })
+            })
+            .collect();
+        Ok(serde_json::to_string(&out).unwrap())
+    }
+
+    /// Entrées pour la page « Codes à usage unique » des Paramètres : titre, identifiant et
+    /// présence d'un code seulement (jamais de mot de passe ni de clé). Base déverrouillée requise.
+    async fn otp_entries(
+        &self,
+        query: String,
+        #[zbus(header)] hdr: Header<'_>,
+        #[zbus(connection)] conn: &zbus::Connection,
+    ) -> fdo::Result<String> {
+        self.check_caller(&hdr, conn, true).await?;
+        let g = self.shared.lock().unwrap();
+        let v = g.vault.as_ref().ok_or_else(|| failed(tr("database locked")))?;
+        let tokens: Vec<String> = fold(&query).split_whitespace().map(String::from).collect();
+        let mut items: Vec<_> = v
+            .summaries()
+            .into_iter()
+            .filter(|s| {
+                let hay = fold(&format!("{} {} {} {}", s.title, s.username, s.url, s.group));
+                tokens.iter().all(|t| hay.contains(t.as_str()))
+            })
+            .collect();
+        items.sort_by_key(|s| fold(&s.title));
+        let out: Vec<_> = items
+            .iter()
+            .take(100)
+            .map(|s| json!({"id": s.id, "title": s.title, "username": s.username, "has_totp": s.has_totp}))
+            .collect();
+        Ok(serde_json::to_string(&out).unwrap())
+    }
+
+    #[zbus(signal)]
+    async fn changed(emitter: &zbus::object_server::SignalEmitter<'_>) -> zbus::Result<()>;
+}
+
+impl Service {
+    /// Écriture en arrière-plan : instantané de la base, préparation hors verrou (dérivations
+    /// Argon2), puis écriture ; le résultat est annoncé par une notification (`done` : titre et
+    /// texte en cas de succès). Renvoie aussitôt la réponse JSON pour l'appelant.
+    fn save_in_background(
+        &self,
+        conn: &zbus::Connection,
+        done: (String, String),
+        prepare: impl FnOnce(&crate::vault::Snapshot) -> Result<crate::vault::Prepared, String> + Send + 'static,
+    ) -> String {
         let snapshot = {
             let mut g = self.shared.lock().unwrap();
             if g.saving {
-                return Ok(json!({"ok": false, "error": tr("a save is already in progress")}).to_string());
+                return json!({"ok": false, "error": tr("a save is already in progress")}).to_string();
             }
-            let v = g.vault.as_mut().ok_or_else(|| failed(tr("database locked")))?;
+            let Some(v) = g.vault.as_mut() else {
+                return json!({"ok": false, "error": tr("database locked")}).to_string();
+            };
             match v.snapshot() {
                 Ok(snap) => {
                     g.saving = true;
@@ -630,18 +826,18 @@ impl Service {
                 }
                 Err(e) => {
                     log_error(&format!("save refused: {e}"));
-                    return Ok(json!({"ok": false, "error": e}).to_string());
+                    return json!({"ok": false, "error": e}).to_string();
                 }
             }
         };
         let shared = self.shared.clone();
         let conn = zbus::blocking::Connection::from(conn.clone());
         std::thread::spawn(move || {
-            let (group, keep, path) = {
+            let (keep, path) = {
                 let g = shared.lock().unwrap();
-                (g.cfg.new_entry_group.clone(), g.cfg.backups_keep, g.cfg.database.clone())
+                (g.cfg.backups_keep, g.cfg.database.clone())
             };
-            let prepared = crate::vault::prepare_add(&snapshot, &group, &title, &username, &password, &url);
+            let prepared = prepare(&snapshot);
             let result = {
                 let mut g = shared.lock().unwrap();
                 g.saving = false;
@@ -660,7 +856,7 @@ impl Service {
             match result {
                 Ok(_) => {
                     emit_changed(&conn);
-                    notify_blocking(&conn, &tr("KeePass entry saved"), &tr1("“%1” was added to the database", &title));
+                    notify_blocking(&conn, &done.0, &done.1);
                 }
                 Err(e) => {
                     log_error(&format!("save refused: {e}"));
@@ -668,11 +864,36 @@ impl Service {
                 }
             }
         });
-        Ok(json!({"ok": true, "pending": true}).to_string())
+        json!({"ok": true, "pending": true}).to_string()
     }
+}
 
-    #[zbus(signal)]
-    async fn changed(emitter: &zbus::object_server::SignalEmitter<'_>) -> zbus::Result<()>;
+/// Photo temporaire du scan de QR code à l'appareil photo.
+fn scan_path() -> PathBuf {
+    std::env::var_os("XDG_RUNTIME_DIR")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| data_dir())
+        .join("keepass-kbd-scan.jpg")
+}
+
+/// Aperçu JSON d'une URI otpauth valide : émetteur, compte, paramètres et code actuel.
+fn otp_description(uri: &str) -> String {
+    match crate::totp::describe(uri) {
+        Some(d) => {
+            let (code, remaining) = d.spec.code_now();
+            json!({
+                "ok": true,
+                "issuer": d.issuer,
+                "account": d.account,
+                "digits": d.spec.digits,
+                "period": d.spec.period,
+                "code": code,
+                "remaining": remaining,
+            })
+            .to_string()
+        }
+        None => json!({"ok": false, "error": tr(crate::totp::ERR_INVALID)}).to_string(),
+    }
 }
 
 fn emit_changed(conn: &zbus::blocking::Connection) {

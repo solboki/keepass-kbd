@@ -350,6 +350,38 @@ Page {
                                             function() { page.statusText = page.t("Setting not saved") })
             }
 
+            // Ajout du code d'une entrée : clé, lien otpauth://, capture d'écran ou appareil photo.
+            BackgroundItem {
+                visible: !!page.settings.totp_enabled
+                enabled: page.loaded && !page.uninstalling
+                height: Theme.itemSizeMedium
+                onClicked: pageStack.push(Qt.resolvedUrl("OtpEntriesPage.qml"))
+                Icon {
+                    id: otpAddIcon
+                    x: Theme.horizontalPageMargin
+                    anchors.verticalCenter: parent.verticalCenter
+                    source: "image://theme/icon-m-timer"
+                    color: parent.highlighted ? Theme.highlightColor : Theme.primaryColor
+                }
+                Column {
+                    anchors { left: otpAddIcon.right; leftMargin: Theme.paddingMedium; right: parent.right
+                              rightMargin: Theme.horizontalPageMargin; verticalCenter: parent.verticalCenter }
+                    Label {
+                        width: parent.width
+                        truncationMode: TruncationMode.Fade
+                        color: parent.parent.highlighted ? Theme.highlightColor : Theme.primaryColor
+                        text: page.t("Add a one-time code to an entry")
+                    }
+                    Label {
+                        width: parent.width
+                        truncationMode: TruncationMode.Fade
+                        font.pixelSize: Theme.fontSizeExtraSmall
+                        color: parent.parent.highlighted ? Theme.secondaryHighlightColor : Theme.secondaryColor
+                        text: page.t("Secret key, screenshot or camera")
+                    }
+                }
+            }
+
             SectionHeader { text: page.t("Database") }
 
             DetailItem {

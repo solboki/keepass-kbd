@@ -12,6 +12,12 @@ after listing the changes under “Unreleased”.
   button types the current code of entries that have one (`otp` URI of KeePassXC / KeePassDX, KeePass 2
   `TimeOtp-*` fields, legacy `TOTP Seed` / `TOTP Settings`; SHA-1/256/512, Steam). The secret key stays in
   the service; only the code is sent to the keyboard (new `Totp` and `SetTotpEnabled` D-Bus methods).
+- Add a two-factor code to an entry, from the keyboard (*+ Code* button) or from the settings
+  (*Add a one-time code to an entry*): secret key typed or pasted, `otpauth://` link, screenshot of the
+  QR code, or camera scan (settings). The current code is shown to finish the activation on the site;
+  the code is saved in the `otp` field (KeePassXC / KeePassDX format) with the previous version kept in
+  the entry history. New D-Bus methods `OtpPreview`, `SetOtp`, `OtpFromImage`, `RecentImages`,
+  `OtpEntries`, `OtpScanPath`; the Settings app may now list entry titles and usernames for this.
 - KeePass key in the Jolla number and phone pads: code fields open one of these pads, which allow no
   layout change; a KeePass key (bottom left) now opens the KeePass layout, and typing the code returns to
   the pad. The package adds a few marked lines to the pad files of `jolla-keyboard`

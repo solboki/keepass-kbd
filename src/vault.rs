@@ -441,13 +441,36 @@ pub fn prepare_add(
         e.set_unprotected("Notes", "");
         e.id()
     };
+    serialise(modified, &snap.key, id.to_string())
+}
+
+/// Prépare l'ajout (ou le remplacement) du code à usage unique d'une entrée : champ protégé
+/// `otp` contenant l'URI otpauth. L'état précédent de l'entrée rejoint son historique, comme
+/// lors d'une modification dans KeePassXC. Les anciens champs TOTP éventuels sont laissés :
+/// le champ `otp` est lu en premier.
+pub fn prepare_set_otp(snap: &Snapshot, id: &str, uri: &str) -> Result<Prepared, String> {
+    if !snap.fidelity_ok {
+        check_fidelity(&snap.raw, &snap.db, &snap.key)?;
+    }
+    let uuid = uuid::Uuid::parse_str(id).map_err(|_| crate::i18n::tr("entry not found"))?;
+    let mut modified = snap.db.clone();
+    {
+        let mut e = modified.entry_mut(EntryId::from(uuid)).ok_or_else(|| crate::i18n::tr("entry not found"))?;
+        let mut tracked = e.track_changes();
+        tracked.set_protected("otp", uri);
+    }
+    serialise(modified, &snap.key, id.to_string())
+}
+
+/// Sérialise une base modifiée, la relit et la compare à l'original en mémoire.
+fn serialise(modified: Database, key: &DatabaseKey, id: String) -> Result<Prepared, String> {
     let mut out = Zeroizing::new(Vec::new());
-    modified.save(&mut *out, snap.key.clone()).map_err(|e| format!("serialisation: {e}"))?;
-    let reparsed = Database::parse(&out, snap.key.clone()).map_err(open_err)?;
+    modified.save(&mut *out, key.clone()).map_err(|e| format!("serialisation: {e}"))?;
+    let reparsed = Database::parse(&out, key.clone()).map_err(open_err)?;
     if reparsed != modified {
         return Err("in-memory verification after writing failed. Nothing was written.".into());
     }
-    Ok(Prepared { db: modified, bytes: out, id: id.to_string() })
+    Ok(Prepared { db: modified, bytes: out, id })
 }
 
 /// Groupe de destination (« Dossier/Sous-dossier »), créé s'il n'existe pas. "" = racine.
@@ -551,6 +574,34 @@ fn histogram_diff(a: &BTreeMap<String, usize>, b: &BTreeMap<String, usize>) -> V
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn otp_is_added_with_history() {
+        let key = DatabaseKey::new().with_password("test");
+        let mut db = Database::new();
+        let id = {
+            let mut root = db.root_mut();
+            let mut e = root.add_entry();
+            e.set_unprotected("Title", "Site");
+            e.set_unprotected("UserName", "boris");
+            e.set_protected("Password", "secret");
+            e.id()
+        };
+        let mut raw = Zeroizing::new(Vec::new());
+        db.save(&mut *raw, key.clone()).unwrap();
+        let db = Database::parse(&raw, key.clone()).unwrap();
+        let snap = Snapshot { db, raw, sha256: [0; 32], key: key.clone(), fidelity_ok: false };
+        let uri = "otpauth://totp/Site:boris?secret=JBSWY3DPEHPK3PXP&issuer=Site";
+        let prepared = prepare_set_otp(&snap, &id.to_string(), uri).unwrap();
+        let reread = Database::parse(&prepared.bytes, key).unwrap();
+        let e = reread.entry(id).unwrap();
+        assert_eq!(e.get("otp"), Some(uri));
+        assert_eq!(e.get("Password"), Some("secret"));
+        let history = e.history.as_ref().unwrap();
+        assert_eq!(history.get_entries().len(), 1);
+        assert_eq!(history.get_entries()[0].get("otp"), None);
+        assert!(prepare_set_otp(&snap, "00000000-0000-0000-0000-000000000000", uri).is_err());
+    }
 
     #[test]
     fn app_token_matching() {
