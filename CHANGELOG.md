@@ -6,6 +6,13 @@ Incrémenter avec `scripts/bump-version.sh patch|minor|major`.
 
 ## [Non publié]
 
+## [0.7.1] - 2026-11-20
+### Corrigé
+- Entrée « Clavier KeePass » absente de Paramètres › Entrée de texte : la clé `settings=` n'est lue
+  que si la disposition déclare un gestionnaire de saisie (`KeepassInputHandler.qml`).
+### Modifié
+- L'engrenage reste toujours aligné sur le bord droit, quel que soit l'écran affiché.
+
 ## [0.7.0] - 2026-11-20
 ### Ajouté
 - Entrée « Clavier KeePass » dans Paramètres › Saisie de texte (clé `settings=` de la disposition).

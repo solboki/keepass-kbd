@@ -480,12 +480,7 @@ KeyboardLayout {
                 id: rightButtons
                 anchors { right: parent.right; rightMargin: Theme.paddingSmall; verticalCenter: parent.verticalCenter }
                 spacing: Theme.paddingSmall
-                KpxButton {
-                    width: root.unit * 1.05; height: root.unit * 0.8
-                    flat: true
-                    iconSource: "image://theme/icon-m-setting"
-                    onClicked: settingsUi.call("showPage", ["system_settings/system/text_input/keepass_kbd"])
-                }
+                // L'engrenage reste le dernier élément : toujours aligné sur le bord droit.
                 KpxButton {
                     visible: root.mode === "list" || root.mode === "generate" || root.mode === "save"
                     width: root.unit * 1.05; height: root.unit * 0.8
@@ -503,6 +498,12 @@ KeyboardLayout {
                     flat: true
                     iconSource: "image://theme/icon-m-device-lock"
                     onClicked: daemon.typedCall("Lock", [], function() { root.refreshStatus() })
+                }
+                KpxButton {
+                    width: root.unit * 1.05; height: root.unit * 0.8
+                    flat: true
+                    iconSource: "image://theme/icon-m-setting"
+                    onClicked: settingsUi.call("showPage", ["system_settings/system/text_input/keepass_kbd"])
                 }
             }
         }

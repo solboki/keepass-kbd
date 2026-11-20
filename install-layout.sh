@@ -10,6 +10,7 @@ stamp() { sed "s/@VERSION@/$VERSION/g" "$1" > "$2" && chmod 644 "$2"; }
 stamp "$SRC/qml/keepass.qml" "$DEST/keepass.qml"
 install -m 644 "$SRC/qml/KpxButton.qml" "$SRC/qml/KpxMiniKeyboard.qml" "$SRC/qml/KpxBackspaceButton.qml" "$DEST/"
 install -m 644 "$SRC/dist/layouts_keepass.conf" "$DEST/"
+install -m 644 "$SRC/qml/handlers/KeepassInputHandler.qml" /usr/share/maliit/plugins/com/jolla/handlers/
 mkdir -p "$PAGES"
 stamp "$SRC/settings/main.qml" "$PAGES/main.qml"
 install -m 644 "$SRC/settings/KeepassTextInputSettings.qml" "$PAGES/"
