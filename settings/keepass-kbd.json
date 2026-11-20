@@ -1,0 +1,14 @@
+{
+    "entries": [
+        {
+            "path": "system_settings/system/text_input/keepass_kbd",
+            "title": "Clavier KeePass",
+            "type": "page",
+            "icon": "image://theme/icon-m-keys",
+            "order": 1010,
+            "params": {
+                "source": "/usr/share/jolla-settings/pages/keepass-kbd/main.qml"
+            }
+        }
+    ]
+}

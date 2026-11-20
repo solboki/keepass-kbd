@@ -1,0 +1,13 @@
+[Unit]
+Description=Service KeePass pour la disposition clavier (keepass-kbd)
+After=dbus.socket
+
+[Service]
+Type=dbus
+BusName=org.keepasskbd.Daemon
+ExecStart=%h/.local/bin/keepass-kbd daemon
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=post-user-session.target
