@@ -1,7 +1,6 @@
 // Paramètres › Entrée de texte › Clavier KeePass
 import QtQuick 2.0
 import Sailfish.Silica 1.0
-import Sailfish.Pickers 1.0
 import Nemo.DBus 2.0
 import "KpxStrings.js" as S
 
@@ -17,6 +16,14 @@ Page {
     property string statusText: ""
     property bool loaded: false
     property bool uninstalling: false
+    // Premier lancement (aucune base choisie) : ouvrir le navigateur de fichiers automatiquement.
+    property bool autoPicked: false
+    Timer {
+        id: autoPickTimer
+        interval: 200
+        repeat: true
+        onTriggered: if (page.status === PageStatus.Active && !pageStack.busy) { stop(); page.openPicker() }
+    }
     // Remplacé à l'installation par la version de Cargo.toml.
     readonly property string uiVersion: "@VERSION@"
 
@@ -24,12 +31,17 @@ Page {
     function t(key, arg) { return S.tr(lang, key, arg) }
 
     function openGroups() { pageStack.push(groupPage) }
+    function openPicker() { pageStack.push(kdbxPicker) }
 
     function reload() {
         daemon.typedCall("GetSettings", [], function(json) {
             var s = {}
             try { s = JSON.parse(json) } catch (e) {}
             page.settings = s
+            if (!s.database && !page.autoPicked) {
+                page.autoPicked = true
+                autoPickTimer.start()
+            }
             var i = page.policies.indexOf(s.relock_policy)
             if (i >= 0) policyBox.currentIndex = i
             page.loaded = true
@@ -82,7 +94,7 @@ Page {
                 model: gp.groups || []
                 header: Column {
                     width: parent.width
-                    PageHeader { title: page.t("Folder for new entries") }
+                    PageHeader { title: S.tr(S.lang(Qt.locale().name), "Folder for new entries") }
                     TextField {
                         width: parent.width
                         label: page.t("New folder (e.g. Internet/Apps)")
@@ -126,22 +138,94 @@ Page {
         }
     }
 
-    // ── Choix d'un autre fichier .kdbx ────────────────────────────────
+    // ── Choix du fichier .kdbx ────────────────────────────────────────
+    // Navigateur alimenté par le service : l'application Paramètres (groupe « privileged »)
+    // ne peut pas lire les montages FUSE sans allow_other (rclone, sshfs…), le service si.
     Component {
         id: kdbxPicker
-        FilePickerPage {
-            title: page.t("Choose a KeePass database")
-            nameFilters: [ "*.kdbx" ]
-            onSelectedContentPropertiesChanged: {
-                var filePath = selectedContentProperties.filePath
-                if (!filePath) return
-                daemon.typedCall("SetDatabase", [{ "type": "s", "value": String(filePath) }], function(json) {
+        Page {
+            id: picker
+            property string path: ""
+            property var listing: ({})
+            property var items: []
+
+            function open(p) {
+                daemon.typedCall("ListDir", [{ "type": "s", "value": p }], function(json) {
+                    var r = {}
+                    try { r = JSON.parse(json) } catch (e) {}
+                    picker.listing = r
+                    picker.path = r.path || ""
+                    var list = []
+                    if (r.parent && r.path !== "/") list.push({ kind: "up", name: ".." })
+                    var d = r.dirs || [], f = r.files || []
+                    for (var i = 0; i < d.length; ++i) list.push({ kind: "dir", name: d[i] })
+                    for (var j = 0; j < f.length; ++j) list.push({ kind: "file", name: f[j] })
+                    picker.items = list
+                }, function() { page.statusText = page.t("keepass-kbd service unreachable") })
+            }
+
+            function choose(file) {
+                daemon.typedCall("SetDatabase", [{ "type": "s", "value": picker.path + "/" + file }], function(json) {
                     var r = {}
                     try { r = JSON.parse(json) } catch (e) {}
                     page.statusText = r.ok ? page.t("New database saved. Unlock it from the keyboard.")
                                            : (r.error || page.t("Unable to use this file"))
                     page.reload()
+                    pageStack.pop()
                 }, function() { page.statusText = page.t("keepass-kbd service unreachable") })
+            }
+
+            Component.onCompleted: open("")
+
+            SilicaListView {
+                anchors.fill: parent
+                model: picker.items
+                header: Column {
+                    width: parent.width
+                    PageHeader {
+                        title: S.tr(S.lang(Qt.locale().name), "Choose a KeePass database")
+                        description: picker.path
+                    }
+                    Label {
+                        visible: !!picker.listing.error || picker.items.length === 0
+                        x: Theme.horizontalPageMargin
+                        width: parent.width - 2 * Theme.horizontalPageMargin
+                        wrapMode: Text.Wrap
+                        color: Theme.highlightColor
+                        text: picker.listing.error ? page.t("Cannot open this folder") : page.t("No folder or .kdbx file here")
+                        bottomPadding: Theme.paddingLarge
+                    }
+                }
+                delegate: ListItem {
+                    contentHeight: Theme.itemSizeSmall
+                    onClicked: {
+                        if (modelData.kind === "up") picker.open(picker.listing.parent)
+                        else if (modelData.kind === "dir") picker.open(picker.path.replace(/\/$/, "") + "/" + modelData.name)
+                        else picker.choose(modelData.name)
+                    }
+                    Icon {
+                        id: entryIcon
+                        x: Theme.horizontalPageMargin
+                        anchors.verticalCenter: parent.verticalCenter
+                        source: modelData.kind === "file" ? "image://theme/icon-m-keys"
+                              : modelData.kind === "up" ? "image://theme/icon-m-back" : "image://theme/icon-m-folder"
+                        color: modelData.kind === "file" ? Theme.highlightColor : Theme.primaryColor
+                    }
+                    Label {
+                        anchors { left: entryIcon.right; leftMargin: Theme.paddingMedium; right: parent.right
+                                  rightMargin: Theme.horizontalPageMargin; verticalCenter: parent.verticalCenter }
+                        truncationMode: TruncationMode.Fade
+                        color: modelData.kind === "file" ? Theme.highlightColor : Theme.primaryColor
+                        text: modelData.kind === "up" ? page.t("Parent folder") : modelData.name
+                    }
+                }
+                PullDownMenu {
+                    MenuItem {
+                        text: page.t("Home folder")
+                        onClicked: picker.open(picker.listing.home || "")
+                    }
+                }
+                VerticalScrollDecorator {}
             }
         }
     }
@@ -273,7 +357,7 @@ Page {
                 anchors.horizontalCenter: parent.horizontalCenter
                 text: page.t("Choose another file…")
                 enabled: page.loaded && !page.uninstalling
-                onClicked: pageStack.push(kdbxPicker)
+                onClicked: page.openPicker()
             }
             Item { width: 1; height: Theme.paddingLarge }
             ValueButton {

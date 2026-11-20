@@ -10,7 +10,9 @@ for_each_session() {
 }
 
 # Nouvelle version du service : il redémarre à la demande (activation D-Bus).
-pkill -x keepass-kbd 2>/dev/null || :
+for_each_session 'systemctl --user daemon-reload; systemctl --user stop keepass-kbd.service'
+# Secours (pkill de BusyBox : -x ne reconnaît pas ce processus, -f oui).
+pkill -f '^/usr/bin/keepass-kbd daemon' 2>/dev/null || :
 if [ "$1" = 1 ]; then
     # Première installation : activer la disposition KeePass à côté des claviers existants.
     for_each_session 'cur=$(dconf read /sailfish/text_input/enabled_layouts); case "$cur" in *keepass.qml*) ;; ""|"[]") ;; *) dconf write /sailfish/text_input/enabled_layouts "$(echo "$cur" | sed "s/]\$/, '"'"'keepass.qml'"'"']/")" ;; esac'

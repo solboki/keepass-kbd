@@ -6,6 +6,18 @@ after listing the changes under “Unreleased”.
 
 ## [Unreleased]
 
+## [1.0.1] - 2026-11-20
+### Fixed
+- Choosing the database file failed for folders on FUSE mounts without `allow_other` (rclone, sshfs…):
+  the Settings app runs with the `privileged` group and cannot read them. The file browser is now
+  provided by the service, which runs as the user (new `ListDir` D-Bus method).
+- Titles of the folder and file chooser pages were empty.
+- Upgrades left the previous service running (BusyBox `pkill -x` does not match it): the package
+  scripts now stop it with `systemctl --user` in each session, with `pkill -f` as a fallback.
+### Added
+- First launch: while no database is configured, the KeePass layout opens its settings page once and
+  the file browser opens automatically; the layout also shows a “Choose the database file…” button.
+
 ## [1.0.0] - 2026-11-20
 First public release.
 ### Added

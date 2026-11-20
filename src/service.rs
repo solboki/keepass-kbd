@@ -383,6 +383,59 @@ impl Service {
         Ok(true)
     }
 
+    /// Contenu d'un dossier pour le choix du fichier .kdbx dans les Paramètres.
+    /// Le sélecteur de Sailfish tourne dans l'application Paramètres (groupe « privileged »),
+    /// qui ne peut pas lire les montages FUSE sans allow_other (rclone, sshfs…) : le service,
+    /// lui, tourne sous l'identité de l'utilisateur. Dossiers et fichiers .kdbx uniquement.
+    async fn list_dir(
+        &self,
+        path: String,
+        #[zbus(header)] hdr: Header<'_>,
+        #[zbus(connection)] conn: &zbus::Connection,
+    ) -> fdo::Result<String> {
+        self.check_caller(&hdr, conn, true).await?;
+        let home = crate::config::home();
+        let current = self.shared.lock().unwrap().cfg.database.clone();
+        let mut dir = if path.is_empty() {
+            current.parent().filter(|p| p.is_dir()).map(|p| p.to_path_buf()).unwrap_or_else(|| home.clone())
+        } else {
+            PathBuf::from(path)
+        };
+        if !dir.is_dir() {
+            dir = home.clone();
+        }
+        let mut dirs = Vec::new();
+        let mut files = Vec::new();
+        let read = std::fs::read_dir(&dir);
+        let error = read.as_ref().err().map(|e| e.to_string());
+        if let Ok(rd) = read {
+            for e in rd.flatten() {
+                let name = e.file_name().to_string_lossy().to_string();
+                if name.starts_with('.') {
+                    continue;
+                }
+                let p = e.path();
+                if p.is_dir() {
+                    dirs.push(name);
+                } else if name.to_lowercase().ends_with(".kdbx") {
+                    files.push(name);
+                }
+            }
+        }
+        dirs.sort_by_key(|n| n.to_lowercase());
+        files.sort_by_key(|n| n.to_lowercase());
+        let parent = dir.parent().map(|p| p.to_string_lossy().to_string());
+        Ok(json!({
+            "path": dir.to_string_lossy(),
+            "parent": parent,
+            "home": home.to_string_lossy(),
+            "dirs": dirs,
+            "files": files,
+            "error": error,
+        })
+        .to_string())
+    }
+
     /// Change de base : vérifie le fichier, verrouille et enregistre la configuration.
     async fn set_database(
         &self,

@@ -64,6 +64,12 @@ KeyboardLayout {
             MInputMethodQuick.sendCommit(text)
     }
 
+    property bool databaseConfigured: true
+    property bool firstRunPrompted: false
+    function openSettings() {
+        settingsUi.call("showPage", ["system_settings/system/text_input/keepass_kbd"])
+    }
+
     // Dernière disposition utilisée avant KeePass (FUTO en général).
     property int previousIndex: -1
 
@@ -102,6 +108,13 @@ KeyboardLayout {
                 search()
             } else if (s.state === "missing") {
                 mode = "missing"
+                databaseConfigured = !!s.database
+                // Premier lancement (aucune base choisie) : ouvrir le choix du fichier, une fois.
+                if (!s.database && !firstRunPrompted && canvas.activeIndex === layoutIndex
+                        && MInputMethodQuick.active) {
+                    firstRunPrompted = true
+                    openSettings()
+                }
             } else {
                 mode = "locked"; editing = "master"; typing = false
                 entries = []; suggestions = []; selected = null; buildModel()
@@ -606,7 +619,7 @@ KeyboardLayout {
                     width: root.unit * 1.05; height: root.unit * 0.8
                     flat: true
                     iconSource: "image://theme/icon-m-setting"
-                    onClicked: settingsUi.call("showPage", ["system_settings/system/text_input/keepass_kbd"])
+                    onClicked: root.openSettings()
                 }
             }
         }
@@ -992,15 +1005,16 @@ KeyboardLayout {
                 VerticalScrollDecorator {}
             }
 
-            // ── Base introuvable / service arrêté ─────────────────────
+            // ── Base introuvable / non choisie / service arrêté ───────
             Column {
                 visible: root.mode === "missing" || root.mode === "offline"
                 anchors.centerIn: parent
                 width: parent.width - 2 * Theme.paddingLarge
-                spacing: Theme.paddingMedium
+                spacing: Theme.paddingLarge
                 Icon {
                     anchors.horizontalCenter: parent.horizontalCenter
-                    source: "image://theme/icon-m-question"
+                    source: root.mode === "missing" && !root.databaseConfigured ? "image://theme/icon-m-keys"
+                                                                              : "image://theme/icon-m-question"
                     color: Theme.secondaryColor
                 }
                 Label {
@@ -1008,9 +1022,19 @@ KeyboardLayout {
                     wrapMode: Text.Wrap
                     horizontalAlignment: Text.AlignHCenter
                     color: Theme.secondaryColor
-                    text: root.mode === "missing"
-                          ? root.t("The .kdbx file was not found. Check its location in the KeePass Keyboard settings.")
-                          : root.t("Start the service: systemctl --user start keepass-kbd")
+                    text: root.mode === "offline" ? root.t("Start the service: systemctl --user start keepass-kbd")
+                          : root.databaseConfigured ? root.t("The .kdbx file was not found. Check its location in the KeePass Keyboard settings.")
+                          : root.t("No KeePass database selected yet.")
+                }
+                KpxButton {
+                    visible: root.mode === "missing"
+                    anchors.horizontalCenter: parent.horizontalCenter
+                    width: Math.min(parent.width, Theme.itemSizeHuge * 2.6)
+                    height: root.unit * 0.9
+                    highlighted: true
+                    iconSource: "image://theme/icon-m-folder"
+                    text: root.t("Choose the database file…")
+                    onClicked: root.openSettings()
                 }
             }
 

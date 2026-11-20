@@ -12,5 +12,7 @@ for_each_session() {
 if [ "$1" = 0 ]; then
     # Désinstallation complète : retirer la disposition et arrêter le service.
     for_each_session 'cur=$(dconf read /sailfish/text_input/enabled_layouts); new=$(echo "$cur" | sed "s/, *'"'"'keepass.qml'"'"'//; s/'"'"'keepass.qml'"'"', *//"); dconf write /sailfish/text_input/enabled_layouts "$new"; [ "$(dconf read /sailfish/text_input/active_layout)" = "'"'"'keepass.qml'"'"'" ] && dconf write /sailfish/text_input/active_layout "$(echo "$new" | sed "s/^\\[ *\\('"'"'[^'"'"']*'"'"'\\).*/\\1/")"; systemctl --user stop keepass-kbd.service'
-    pkill -x keepass-kbd 2>/dev/null || :
+    for_each_session 'systemctl --user daemon-reload; systemctl --user stop keepass-kbd.service'
+# Secours (pkill de BusyBox : -x ne reconnaît pas ce processus, -f oui).
+pkill -f '^/usr/bin/keepass-kbd daemon' 2>/dev/null || :
 fi

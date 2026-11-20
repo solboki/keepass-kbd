@@ -5,7 +5,7 @@ description = "KeePass password keyboard for Sailfish OS: fill, generate and sav
 license = "GPL-3.0-or-later"
 repository = "https://github.com/solboki/keepass-kbd"
 readme = "README.md"
-version = "1.0.0"
+version = "1.0.1"
 edition = "2024"
 
 [dependencies]
@@ -27,7 +27,7 @@ summary = "KeePass password keyboard for Sailfish OS"
 vendor = "Boris Solodki"
 release = "1"
 auto-req = "no"
-requires = { jolla-keyboard = "*", maliit-framework-wayland = "*", sailfishsilica-qt5 = "*", nemo-qml-plugin-dbus-qt5 = "*", polkit = "*", sailfish-components-pickers-qt5 = "*", glib2 = "*" }
+requires = { jolla-keyboard = "*", maliit-framework-wayland = "*", sailfishsilica-qt5 = "*", nemo-qml-plugin-dbus-qt5 = "*", polkit = "*", glib2 = "*" }
 post_install_script = "dist/rpm/post-install.sh"
 pre_uninstall_script = "dist/rpm/pre-uninstall.sh"
 post_uninstall_script = "dist/rpm/post-uninstall.sh"
