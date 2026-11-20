@@ -297,9 +297,11 @@ KeyboardLayout {
                              if (r.ok) {
                                  clearSecrets()
                                  mode = "list"; typing = false; editing = ""
-                                 statusMessage = "entrée enregistrée"
-                                 refreshOrigin()
-                                 search()
+                                 statusMessage = ""
+                                 // La notification système confirme : retour à la disposition
+                                 // précédente (FUTO) et fermeture du clavier.
+                                 backToKeyboard()
+                                 MInputMethodQuick.userHide()
                              } else {
                                  statusMessage = r.error || "échec de l'enregistrement"
                              }

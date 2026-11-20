@@ -86,6 +86,7 @@ fn daemon(args: &[String], cfg_path: &std::path::Path) -> Result<(), String> {
         cfg_path: cfg_path.to_path_buf(),
         vault: None,
         unlocked_at: None,
+        saving: false,
         last_stat: None,
         message: String::new(),
         usage: service::load_usage(),

@@ -226,110 +226,59 @@ impl Vault {
         Ok(e.get(key).unwrap_or("").to_string())
     }
 
-    fn target_group(&self, path: &str) -> Result<GroupId, String> {
-        let parts: Vec<&str> = path.split('/').map(str::trim).filter(|s| !s.is_empty()).collect();
-        if parts.is_empty() {
-            return Ok(self.db.root().id());
-        }
-        self.db
-            .root()
-            .group_by_path(&parts)
-            .map(|g| g.id())
-            .ok_or_else(|| format!("groupe « {path} » introuvable dans la base"))
-    }
-
     /// Vérifie que la bibliothèque réécrit la base actuelle sans perdre d'éléments XML.
     pub fn check_fidelity(&mut self) -> Result<(), String> {
         if self.fidelity_ok_for == Some(self.fingerprint.sha256) {
             return Ok(());
         }
-        let original_xml = Zeroizing::new(
-            Database::get_xml(&mut &self.raw[..], self.creds.key()).map_err(open_err)?,
-        );
-        let mut resaved = Zeroizing::new(Vec::new());
-        self.db
-            .save(&mut *resaved, self.creds.key())
-            .map_err(|e| format!("sérialisation : {e}"))?;
-        let resaved_xml = Zeroizing::new(
-            Database::get_xml(&mut &resaved[..], self.creds.key()).map_err(open_err)?,
-        );
-        let diff = histogram_diff(&tag_histogram(&original_xml), &tag_histogram(&resaved_xml));
-        if !diff.is_empty() {
-            return Err(format!(
-                "la réécriture perdrait ou modifierait des éléments de la base ({}). Écriture refusée.",
-                diff.join(", ")
-            ));
-        }
-        let reparsed = Database::parse(&resaved, self.creds.key()).map_err(open_err)?;
-        if reparsed != self.db {
-            return Err("la base relue après réécriture diffère de l'originale. Écriture refusée.".into());
-        }
+        check_fidelity(&self.raw, &self.db, &self.creds.key())?;
         self.fidelity_ok_for = Some(self.fingerprint.sha256);
         Ok(())
     }
 
-    /// Ajoute une entrée et écrit le fichier de façon vérifiée et atomique.
-    pub fn add_entry(
-        &mut self,
-        group_path: &str,
-        title: &str,
-        username: &str,
-        password: &str,
-        url: &str,
-        notes: &str,
-        backup_dir: &Path,
-        backups_keep: usize,
-    ) -> Result<String, String> {
-        // 1. Repartir de la version la plus récente du fichier.
+    /// Copie de l'état courant pour préparer une écriture hors verrou (les dérivations
+    /// de clé Argon2 peuvent prendre plusieurs secondes chacune).
+    pub fn snapshot(&mut self) -> Result<Snapshot, String> {
         self.reload_if_changed()?;
-        // 2. Garantir que la bibliothèque ne perd rien sur cette base.
-        self.check_fidelity()?;
+        Ok(Snapshot {
+            db: self.db.clone(),
+            raw: self.raw.clone(),
+            sha256: self.fingerprint.sha256,
+            key: self.creds.key(),
+            fidelity_ok: self.fidelity_ok_for == Some(self.fingerprint.sha256),
+        })
+    }
 
-        // 3. Construire la nouvelle base en mémoire.
-        let group = self.target_group(group_path)?;
-        let mut modified = self.db.clone();
-        let new_id = {
-            let mut g = modified.group_mut(group).ok_or("groupe cible introuvable")?;
-            let mut e = g.add_entry();
-            e.set_unprotected("Title", title);
-            e.set_unprotected("UserName", username);
-            e.set_protected("Password", password);
-            e.set_unprotected("URL", url);
-            e.set_unprotected("Notes", notes);
-            e.id()
-        };
-
-        // 4. Sérialiser puis relire : le résultat doit être identique à la base voulue.
-        let mut out = Zeroizing::new(Vec::new());
-        modified
-            .save(&mut *out, self.creds.key())
-            .map_err(|e| format!("sérialisation : {e}"))?;
-        let reparsed = Database::parse(&out, self.creds.key()).map_err(open_err)?;
-        if reparsed != modified {
-            return Err("vérification après écriture en mémoire échouée. Rien n'a été écrit.".into());
+    /// Note le résultat d'un test de fidélité fait hors verrou, si la base n'a pas changé entre-temps.
+    pub fn mark_fidelity_ok(&mut self, sha256: [u8; 32]) {
+        if self.fingerprint.sha256 == sha256 {
+            self.fidelity_ok_for = Some(sha256);
         }
+    }
 
-        // 5. Sauvegarde de la version actuelle.
-        backup(&self.raw, backup_dir, backups_keep)?;
-
-        // 6. Refuser si le fichier a changé pendant la préparation.
+    /// Écrit une base préparée par [`prepare_add`] : sauvegarde, contrôle de concurrence,
+    /// écriture dans un temporaire relu puis renommage atomique.
+    pub fn commit(&mut self, snap: &Snapshot, prepared: Prepared, backup_dir: &Path, backups_keep: usize) -> Result<String, String> {
+        if self.fingerprint.sha256 != snap.sha256 {
+            return Err("la base a été rechargée pendant l'enregistrement. Réessayez.".into());
+        }
         let (_, now_fp) = read_file(&self.path)?;
-        if now_fp.sha256 != self.fingerprint.sha256 {
+        if now_fp.sha256 != snap.sha256 {
             return Err("la base a été modifiée ailleurs pendant l'enregistrement. Réessayez.".into());
         }
-
-        // 7. Écriture atomique : fichier temporaire dans le même dossier puis renommage.
+        backup(&self.raw, backup_dir, backups_keep)?;
+        let out = &prepared.bytes;
         let tmp = self.path.with_file_name(format!(
             ".{}.keepass-kbd.tmp",
             self.path.file_name().and_then(|s| s.to_str()).unwrap_or("db")
         ));
         {
             let mut f = fs::File::create(&tmp).map_err(|e| format!("création du temporaire : {e}"))?;
-            f.write_all(&out).map_err(|e| format!("écriture : {e}"))?;
+            f.write_all(out).map_err(|e| format!("écriture : {e}"))?;
             f.sync_all().map_err(|e| format!("synchronisation : {e}"))?;
         }
         let written = fs::read(&tmp).map_err(|e| format!("relecture du temporaire : {e}"))?;
-        if written != *out {
+        if written != **out {
             let _ = fs::remove_file(&tmp);
             return Err("le fichier temporaire relu ne correspond pas. Rien n'a été remplacé.".into());
         }
@@ -337,17 +286,15 @@ impl Vault {
             let _ = fs::remove_file(&tmp);
             format!("remplacement du fichier : {e}")
         })?;
-
-        // 8. Adopter la nouvelle version.
         let (raw, fp) = read_file(&self.path)?;
-        if *raw != *out {
+        if *raw != **out {
             return Err("le fichier final relu diffère de ce qui a été écrit (sauvegarde disponible).".into());
         }
-        self.db = modified;
+        self.db = prepared.db;
         self.raw = raw;
         self.fingerprint = fp;
         self.fidelity_ok_for = Some(self.fingerprint.sha256);
-        Ok(new_id.to_string())
+        Ok(prepared.id)
     }
 }
 
@@ -402,6 +349,109 @@ pub fn registrable(host: &str) -> String {
         2
     };
     labels[n.saturating_sub(take)..].join(".")
+}
+
+pub struct Snapshot {
+    pub db: Database,
+    pub raw: Zeroizing<Vec<u8>>,
+    pub sha256: [u8; 32],
+    pub key: DatabaseKey,
+    pub fidelity_ok: bool,
+}
+
+pub struct Prepared {
+    pub db: Database,
+    pub bytes: Zeroizing<Vec<u8>>,
+    pub id: String,
+}
+
+/// Différences de balises sans effet, admises lors du test de fidélité.
+fn benign_difference(name: &str, before: usize, resaved_xml: &[u8], version_kdbx4: bool) -> bool {
+    match name {
+        // Reliquat KDBX 3 : en KDBX 4, l'en-tête est protégé par HMAC et cet élément est ignoré.
+        "HeaderHash" => version_kdbx4,
+        // Valeur par défaut (vrai) rendue explicite ; admis seulement si aucune valeur « False » n'apparaît.
+        "QualityCheck" => before == 0 && !contains(resaved_xml, b"<QualityCheck>False"),
+        _ => false,
+    }
+}
+
+fn contains(hay: &[u8], needle: &[u8]) -> bool {
+    hay.windows(needle.len()).any(|w| w == needle)
+}
+
+/// Test de fidélité : réécrire la base sans modification ne doit rien perdre.
+pub fn check_fidelity(raw: &[u8], db: &Database, key: &DatabaseKey) -> Result<(), String> {
+    let original_xml = Zeroizing::new(Database::get_xml(&mut &raw[..], key.clone()).map_err(open_err)?);
+    let mut resaved = Zeroizing::new(Vec::new());
+    db.save(&mut *resaved, key.clone()).map_err(|e| format!("sérialisation : {e}"))?;
+    let resaved_xml = Zeroizing::new(Database::get_xml(&mut &resaved[..], key.clone()).map_err(open_err)?);
+    let kdbx4 = matches!(db.config.version, keepass::config::DatabaseVersion::KDB4(_));
+    let before = tag_histogram(&original_xml);
+    let after = tag_histogram(&resaved_xml);
+    let diff: Vec<String> = histogram_diff(&before, &after)
+        .into_iter()
+        .filter(|d| {
+            let name = d.split(':').next().unwrap_or("");
+            !benign_difference(name, before.get(name).copied().unwrap_or(0), &resaved_xml, kdbx4)
+        })
+        .collect();
+    if !diff.is_empty() {
+        return Err(format!(
+            "la réécriture perdrait ou modifierait des éléments de la base ({}). Écriture refusée.",
+            diff.join(", ")
+        ));
+    }
+    let reparsed = Database::parse(&resaved, key.clone()).map_err(open_err)?;
+    if reparsed != *db {
+        return Err("la base relue après réécriture diffère de l'originale. Écriture refusée.".into());
+    }
+    Ok(())
+}
+
+/// Prépare l'ajout d'une entrée hors verrou : test de fidélité si nécessaire, sérialisation,
+/// relecture et comparaison complète.
+pub fn prepare_add(
+    snap: &Snapshot,
+    group_path: &str,
+    title: &str,
+    username: &str,
+    password: &str,
+    url: &str,
+) -> Result<Prepared, String> {
+    if !snap.fidelity_ok {
+        check_fidelity(&snap.raw, &snap.db, &snap.key)?;
+    }
+    let group = target_group(&snap.db, group_path)?;
+    let mut modified = snap.db.clone();
+    let id = {
+        let mut g = modified.group_mut(group).ok_or("groupe cible introuvable")?;
+        let mut e = g.add_entry();
+        e.set_unprotected("Title", title);
+        e.set_unprotected("UserName", username);
+        e.set_protected("Password", password);
+        e.set_unprotected("URL", url);
+        e.set_unprotected("Notes", "");
+        e.id()
+    };
+    let mut out = Zeroizing::new(Vec::new());
+    modified.save(&mut *out, snap.key.clone()).map_err(|e| format!("sérialisation : {e}"))?;
+    let reparsed = Database::parse(&out, snap.key.clone()).map_err(open_err)?;
+    if reparsed != modified {
+        return Err("vérification après écriture en mémoire échouée. Rien n'a été écrit.".into());
+    }
+    Ok(Prepared { db: modified, bytes: out, id: id.to_string() })
+}
+
+fn target_group(db: &Database, path: &str) -> Result<GroupId, String> {
+    let parts: Vec<&str> = path.split('/').map(str::trim).filter(|s| !s.is_empty()).collect();
+    if parts.is_empty() {
+        return Ok(db.root().id());
+    }
+    db.root()
+        .group_by_path(&parts)
+        .map(|g| g.id())
+        .ok_or_else(|| format!("groupe « {path} » introuvable dans la base"))
 }
 
 fn backup(raw: &[u8], dir: &Path, keep: usize) -> Result<(), String> {
@@ -481,6 +531,16 @@ mod tests {
         assert_eq!(host_of("app://jolla-email"), None);
         assert_eq!(registrable("compte.laposte.fr"), "laposte.fr");
         assert_eq!(registrable("login.bbc.co.uk"), "bbc.co.uk");
+    }
+
+    #[test]
+    fn benign_differences() {
+        assert!(benign_difference("HeaderHash", 1, b"", true));
+        assert!(!benign_difference("HeaderHash", 1, b"", false));
+        assert!(benign_difference("QualityCheck", 0, b"<QualityCheck>True</QualityCheck>", true));
+        assert!(!benign_difference("QualityCheck", 0, b"<QualityCheck>False</QualityCheck>", true));
+        assert!(!benign_difference("QualityCheck", 3, b"", true));
+        assert!(!benign_difference("CustomData", 1, b"", true));
     }
 
     #[test]

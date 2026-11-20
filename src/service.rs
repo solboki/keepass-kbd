@@ -22,6 +22,7 @@ pub struct Inner {
     pub cfg_path: PathBuf,
     pub vault: Option<Vault>,
     pub unlocked_at: Option<Instant>,
+    pub saving: bool,
     pub last_stat: Option<(u64, Option<SystemTime>)>,
     pub message: String,
     pub usage: HashMap<String, u64>,
@@ -157,26 +158,55 @@ fn privileged_settings_process(pid: u32, settings: &[PathBuf]) -> bool {
     settings.iter().any(|a| a == argv0)
 }
 
+/// Consigne une erreur (jamais de secret) dans le journal et dans `errors.log`.
+fn log_error(msg: &str) {
+    eprintln!("{msg}");
+    let _ = std::fs::create_dir_all(data_dir());
+    let line = format!("{} {msg}\n", chrono::Local::now().format("%Y-%m-%d %H:%M:%S"));
+    use std::io::Write as _;
+    if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(data_dir().join("errors.log")) {
+        let _ = f.write_all(line.as_bytes());
+    }
+}
+
 /// Notification système (bandeau en haut de l'écran sous Sailfish).
-async fn notify(conn: &zbus::Connection, summary: &str, body: &str) {
+fn notify_blocking(conn: &zbus::blocking::Connection, summary: &str, body: &str) {
     use std::collections::HashMap;
     use zbus::zvariant::Value;
     let mut hints: HashMap<&str, Value<'_>> = HashMap::new();
     hints.insert("x-nemo-preview-summary", Value::from(summary));
     hints.insert("x-nemo-preview-body", Value::from(body));
     hints.insert("urgency", Value::U8(1));
-    let r = conn
-        .call_method(
-            Some("org.freedesktop.Notifications"),
-            "/org/freedesktop/Notifications",
-            Some("org.freedesktop.Notifications"),
-            "Notify",
-            &("Clavier KeePass", 0u32, "icon-lock-information", summary, body, Vec::<&str>::new(), hints, 5000i32),
-        )
-        .await;
+    let r = conn.call_method(
+        Some("org.freedesktop.Notifications"),
+        "/org/freedesktop/Notifications",
+        Some("org.freedesktop.Notifications"),
+        "Notify",
+        &("Clavier KeePass", 0u32, "icon-lock-information", summary, body, Vec::<&str>::new(), hints, 5000i32),
+    );
     if let Err(e) = r {
         eprintln!("notification impossible : {e}");
     }
+}
+
+/// Test de fidélité en arrière-plan (après déverrouillage ou rechargement), pour que
+/// l'enregistrement suivant n'ait plus qu'à sérialiser et vérifier.
+pub fn spawn_fidelity_check(shared: Shared) {
+    let snap = {
+        let mut g = shared.lock().unwrap();
+        match g.vault.as_mut().map(|v| v.snapshot()) {
+            Some(Ok(s)) if !s.fidelity_ok => s,
+            _ => return,
+        }
+    };
+    std::thread::spawn(move || match crate::vault::check_fidelity(&snap.raw, &snap.db, &snap.key) {
+        Ok(()) => {
+            if let Some(v) = shared.lock().unwrap().vault.as_mut() {
+                v.mark_fidelity_ok(snap.sha256);
+            }
+        }
+        Err(e) => log_error(&format!("test de fidélité : {e}")),
+    });
 }
 
 fn failed(e: impl Into<String>) -> fdo::Error {
@@ -226,6 +256,7 @@ impl Service {
         };
         if unlocked {
             let _ = Self::changed(&emitter).await;
+            spawn_fidelity_check(self.shared.clone());
         }
         Ok(reply)
     }
@@ -407,6 +438,9 @@ impl Service {
     }
 
     /// Ajoute une entrée et l'écrit dans le fichier. Renvoie {ok, id} ou {ok:false, error}.
+    /// Ajoute une entrée. La préparation et l'écriture se font en arrière-plan (plusieurs
+    /// dérivations de clé Argon2) ; le résultat est annoncé par une notification système.
+    /// Renvoie aussitôt {ok:true, pending:true}, ou {ok:false, error} si l'ajout ne peut pas démarrer.
     async fn add_entry(
         &self,
         title: String,
@@ -415,34 +449,61 @@ impl Service {
         url: String,
         #[zbus(header)] hdr: Header<'_>,
         #[zbus(connection)] conn: &zbus::Connection,
-        #[zbus(signal_emitter)] emitter: zbus::object_server::SignalEmitter<'_>,
     ) -> fdo::Result<String> {
         self.check_caller(&hdr, conn, false).await?;
         let password = Zeroizing::new(password);
-        let reply = {
+        let snapshot = {
             let mut g = self.shared.lock().unwrap();
-                let group = g.cfg.new_entry_group.clone();
-            let keep = g.cfg.backups_keep;
-            let path = g.cfg.database.clone();
+            if g.saving {
+                return Ok(json!({"ok": false, "error": "un enregistrement est déjà en cours"}).to_string());
+            }
             let v = g.vault.as_mut().ok_or_else(|| failed("base verrouillée"))?;
-            let r = v.add_entry(&group, &title, &username, &password, &url, "", &data_dir().join("backups"), keep);
-            g.last_stat = quick_stat(&path);
-            match r {
-                Ok(id) => {
-                    g.usage.insert(id.clone(), now_secs());
-                    save_usage(&g.usage);
-                    json!({"ok": true, "id": id}).to_string()
+            match v.snapshot() {
+                Ok(snap) => {
+                    g.saving = true;
+                    snap
                 }
-                Err(e) => json!({"ok": false, "error": e}).to_string(),
+                Err(e) => {
+                    log_error(&format!("enregistrement refusé : {e}"));
+                    return Ok(json!({"ok": false, "error": e}).to_string());
+                }
             }
         };
-        if reply.contains("\"ok\":true") {
-            let _ = Self::changed(&emitter).await;
-            notify(conn, "Entrée KeePass enregistrée", &format!("« {} » a été ajoutée à la base", title)).await;
-        } else {
-            notify(conn, "Échec de l'enregistrement KeePass", "L'entrée n'a pas été ajoutée. Ouvrez le clavier KeePass pour le détail.").await;
-        }
-        Ok(reply)
+        let shared = self.shared.clone();
+        let conn = zbus::blocking::Connection::from(conn.clone());
+        std::thread::spawn(move || {
+            let (group, keep, path) = {
+                let g = shared.lock().unwrap();
+                (g.cfg.new_entry_group.clone(), g.cfg.backups_keep, g.cfg.database.clone())
+            };
+            let prepared = crate::vault::prepare_add(&snapshot, &group, &title, &username, &password, &url);
+            let result = {
+                let mut g = shared.lock().unwrap();
+                g.saving = false;
+                let r = match (prepared, g.vault.as_mut()) {
+                    (Ok(p), Some(v)) => v.commit(&snapshot, p, &data_dir().join("backups"), keep),
+                    (Ok(_), None) => Err("la base a été verrouillée pendant l'enregistrement".into()),
+                    (Err(e), _) => Err(e),
+                };
+                g.last_stat = quick_stat(&path);
+                if let Ok(id) = &r {
+                    g.usage.insert(id.clone(), now_secs());
+                    save_usage(&g.usage);
+                }
+                r
+            };
+            match result {
+                Ok(_) => {
+                    emit_changed(&conn);
+                    notify_blocking(&conn, "Entrée KeePass enregistrée", &format!("« {title} » a été ajoutée à la base"));
+                }
+                Err(e) => {
+                    log_error(&format!("enregistrement refusé : {e}"));
+                    notify_blocking(&conn, "Échec de l'enregistrement KeePass", &e);
+                }
+            }
+        });
+        Ok(json!({"ok": true, "pending": true}).to_string())
     }
 
     #[zbus(signal)]
@@ -459,6 +520,7 @@ pub fn spawn_watcher(shared: Shared, conn: zbus::blocking::Connection) {
         let poll = shared.lock().unwrap().cfg.poll_seconds.max(2);
         std::thread::sleep(Duration::from_secs(poll));
         let mut changed = false;
+        let mut reloaded = false;
         {
             let mut g = shared.lock().unwrap();
             if g.vault.is_none() {
@@ -479,6 +541,7 @@ pub fn spawn_watcher(shared: Shared, conn: zbus::blocking::Connection) {
                     let r = g.vault.as_mut().unwrap().reload_if_changed();
                     match r {
                         Ok(true) => {
+                            reloaded = true;
                             g.message = "base rechargée".into();
                             eprintln!("base rechargée après modification du fichier");
                             changed = true;
@@ -495,6 +558,9 @@ pub fn spawn_watcher(shared: Shared, conn: zbus::blocking::Connection) {
         }
         if changed {
             emit_changed(&conn);
+        }
+        if reloaded {
+            spawn_fidelity_check(shared.clone());
         }
     });
 }

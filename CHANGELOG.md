@@ -6,6 +6,17 @@ Incrémenter avec `scripts/bump-version.sh patch|minor|major`.
 
 ## [Non publié]
 
+## [0.8.1] - 2026-11-20
+### Corrigé
+- Enregistrement refusé sur les bases KeePassXC : le test de fidélité admet désormais deux
+  différences sans effet (`HeaderHash` obsolète en KDBX 4, `QualityCheck` par défaut rendu explicite).
+- Enregistrement trop long pour l'appel D-Bus sur les bases à dérivation de clé lourde : la préparation
+  et l'écriture se font en arrière-plan, le résultat est annoncé par notification.
+### Modifié
+- Après « Enregistrer », le clavier revient à la disposition précédente et se ferme.
+- Test de fidélité lancé à l'avance, après chaque déverrouillage ou rechargement de la base.
+- Causes d'échec d'enregistrement consignées dans `~/.local/share/keepass-kbd/errors.log` (sans secret).
+
 ## [0.8.0] - 2026-11-20
 ### Ajouté
 - Création d'entrée : titre proposé (nom de l'application lu dans son .desktop, ou nom du site)
