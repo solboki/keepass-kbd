@@ -288,12 +288,41 @@ impl Service {
         Ok(json!({
             "database": g.cfg.database.to_string_lossy(),
             "relock_policy": g.cfg.relock_policy,
+            "new_entry_group": g.cfg.new_entry_group,
             "policies": policies,
             "state": g.state(),
             "entries": g.vault.as_ref().map(|v| v.entry_count()),
             "version": env!("CARGO_PKG_VERSION"),
         })
         .to_string())
+    }
+
+    /// Dossiers de la base (base déverrouillée) et dossier actuel des nouvelles entrées.
+    async fn list_groups(
+        &self,
+        #[zbus(header)] hdr: Header<'_>,
+        #[zbus(connection)] conn: &zbus::Connection,
+    ) -> fdo::Result<String> {
+        self.check_caller(&hdr, conn, true).await?;
+        let g = self.shared.lock().unwrap();
+        let groups = g.vault.as_ref().map(|v| crate::vault::group_paths(&v.db));
+        Ok(json!({"current": g.cfg.new_entry_group, "groups": groups}).to_string())
+    }
+
+    /// Dossier des nouvelles entrées ("" = racine ; créé au premier enregistrement s'il n'existe pas).
+    async fn set_new_entry_group(
+        &self,
+        path: String,
+        #[zbus(header)] hdr: Header<'_>,
+        #[zbus(connection)] conn: &zbus::Connection,
+    ) -> fdo::Result<bool> {
+        self.check_caller(&hdr, conn, true).await?;
+        let clean: Vec<&str> = path.split('/').map(str::trim).filter(|p| !p.is_empty()).collect();
+        let mut g = self.shared.lock().unwrap();
+        g.cfg.new_entry_group = clean.join("/");
+        let cfg_path = g.cfg_path.clone();
+        g.cfg.save(&cfg_path).map_err(failed)?;
+        Ok(true)
     }
 
     async fn set_relock_policy(

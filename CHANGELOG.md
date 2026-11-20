@@ -6,6 +6,14 @@ Incrémenter avec `scripts/bump-version.sh patch|minor|major`.
 
 ## [Non publié]
 
+## [0.9.0] - 2026-11-20
+### Ajouté
+- Paramètres : choix du dossier des nouvelles entrées parmi ceux de la base, ou nouveau dossier
+  (chemins imbriqués « Internet/Applis » acceptés).
+- Le dossier de destination est créé automatiquement au premier enregistrement s'il n'existe pas.
+### Modifié
+- Dossier par défaut des nouvelles entrées : « keepass-kbd » (au lieu de la racine).
+
 ## [0.8.1] - 2026-11-20
 ### Corrigé
 - Enregistrement refusé sur les bases KeePassXC : le test de fidélité admet désormais deux

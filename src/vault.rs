@@ -422,8 +422,8 @@ pub fn prepare_add(
     if !snap.fidelity_ok {
         check_fidelity(&snap.raw, &snap.db, &snap.key)?;
     }
-    let group = target_group(&snap.db, group_path)?;
     let mut modified = snap.db.clone();
+    let group = ensure_group(&mut modified, group_path)?;
     let id = {
         let mut g = modified.group_mut(group).ok_or("groupe cible introuvable")?;
         let mut e = g.add_entry();
@@ -443,15 +443,44 @@ pub fn prepare_add(
     Ok(Prepared { db: modified, bytes: out, id: id.to_string() })
 }
 
-fn target_group(db: &Database, path: &str) -> Result<GroupId, String> {
+/// Groupe de destination (« Dossier/Sous-dossier »), créé s'il n'existe pas. "" = racine.
+fn ensure_group(db: &mut Database, path: &str) -> Result<GroupId, String> {
     let parts: Vec<&str> = path.split('/').map(str::trim).filter(|s| !s.is_empty()).collect();
-    if parts.is_empty() {
-        return Ok(db.root().id());
+    let mut current = db.root().id();
+    for part in parts {
+        let existing = db
+            .group(current)
+            .and_then(|g| g.groups().find(|c| c.name == part).map(|c| c.id()));
+        current = match existing {
+            Some(id) => id,
+            None => {
+                let mut parent = db.group_mut(current).ok_or("groupe parent introuvable")?;
+                let mut g = parent.add_group();
+                g.name = part.to_string();
+                g.id()
+            }
+        };
     }
-    db.root()
-        .group_by_path(&parts)
-        .map(|g| g.id())
-        .ok_or_else(|| format!("groupe « {path} » introuvable dans la base"))
+    Ok(current)
+}
+
+/// Chemins de tous les groupes (hors corbeille), triés ; "" désigne la racine.
+pub fn group_paths(db: &Database) -> Vec<String> {
+    fn walk(g: keepass::db::GroupRef<'_>, prefix: &str, bin: Option<GroupId>, out: &mut Vec<String>) {
+        for c in g.groups() {
+            if Some(c.id()) == bin {
+                continue;
+            }
+            let path = if prefix.is_empty() { c.name.clone() } else { format!("{prefix}/{}", c.name) };
+            out.push(path.clone());
+            walk(c, &path, bin, out);
+        }
+    }
+    let mut out = vec![String::new()];
+    let bin = db.recycle_bin().map(|g| g.id());
+    walk(db.root(), "", bin, &mut out);
+    out[1..].sort_by_key(|p| p.to_lowercase());
+    out
 }
 
 fn backup(raw: &[u8], dir: &Path, keep: usize) -> Result<(), String> {
@@ -531,6 +560,17 @@ mod tests {
         assert_eq!(host_of("app://jolla-email"), None);
         assert_eq!(registrable("compte.laposte.fr"), "laposte.fr");
         assert_eq!(registrable("login.bbc.co.uk"), "bbc.co.uk");
+    }
+
+    #[test]
+    fn groups_are_created_and_listed() {
+        let mut db = Database::new();
+        let a = ensure_group(&mut db, "keepass-kbd").unwrap();
+        assert_eq!(ensure_group(&mut db, "keepass-kbd").unwrap(), a);
+        let b = ensure_group(&mut db, "Internet/Banques").unwrap();
+        assert_ne!(a, b);
+        assert_eq!(ensure_group(&mut db, "").unwrap(), db.root().id());
+        assert_eq!(group_paths(&db), vec!["", "Internet", "Internet/Banques", "keepass-kbd"]);
     }
 
     #[test]

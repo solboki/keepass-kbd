@@ -40,7 +40,7 @@ impl Default for Config {
             keyfile: None,
             relock_policy: "30min".into(),
             poll_seconds: 15,
-            new_entry_group: String::new(),
+            new_entry_group: "keepass-kbd".into(),
             backups_keep: 20,
             allowed_callers: vec![PathBuf::from("/usr/bin/maliit-server")],
             settings_callers: vec![PathBuf::from("/usr/bin/jolla-settings")],
