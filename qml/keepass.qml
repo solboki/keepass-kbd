@@ -46,6 +46,32 @@ KeyboardLayout {
     readonly property real unit: keyHeight > 0 ? keyHeight : Theme.itemSizeSmall
     readonly property bool passwordField: MInputMethodQuick.hiddenText
                                           || !!MInputMethodQuick.extensions.sensitiveInput
+    // Champ numérique (code de double authentification probable) : Maliit.NumberContentType.
+    readonly property bool numberField: MInputMethodQuick.contentType === 1
+
+    // Codes à usage unique (TOTP) : option des Paramètres, désactivée par défaut.
+    property bool totpEnabled: false
+    readonly property bool showTotp: totpEnabled && selected !== null && selected.has_totp === true
+    property int totpRemaining: 0
+    function updateTotpRemaining() {
+        var p = selected && selected.totp_period > 0 ? selected.totp_period : 30
+        totpRemaining = p - Math.floor(Date.now() / 1000) % p
+    }
+    onSelectedChanged: updateTotpRemaining()
+    Timer {
+        interval: 1000
+        repeat: true
+        running: root.showTotp && root.mode === "list" && MInputMethodQuick.active
+        onTriggered: root.updateTotpRemaining()
+    }
+    function insertTotp() {
+        if (!selected) return
+        daemon.typedCall("Totp", [{ "type": "s", "value": selected.id }], function(json) {
+            var r = {}
+            try { r = JSON.parse(json) } catch (e) {}
+            if (r.code) commit(r.code)
+        }, function() { refreshStatus() })
+    }
     readonly property string originLabel: origin.indexOf("app://") === 0 ? origin.substring(6)
                                           : origin.replace(/^[a-z]+:\/\//, "").replace(/^www\./, "").split("/")[0]
 
@@ -133,6 +159,7 @@ KeyboardLayout {
             var s = {}
             try { s = JSON.parse(json) } catch (e) {}
             statusMessage = s.message || ""
+            totpEnabled = !!s.totp_enabled
             if (s.state === "unlocked") {
                 if (mode === "locked" || mode === "offline" || mode === "missing") {
                     mode = "list"; typing = false; editing = ""
@@ -840,21 +867,31 @@ KeyboardLayout {
                     width: parent.width
                     height: root.unit * 0.95
                     spacing: Theme.paddingSmall
+                    readonly property int buttons: root.showTotp ? 3 : 2
+                    readonly property real buttonWidth: (width - backspaceList.width - buttons * Theme.paddingSmall) / buttons
                     KpxButton {
-                        width: (parent.width - backspaceList.width - 2 * Theme.paddingSmall) / 2; height: parent.height
+                        width: parent.buttonWidth; height: parent.height
                         iconSource: "image://theme/icon-m-person"
                         text: root.t("Username")
                         active: root.selected !== null
-                        highlighted: root.selected !== null && !root.passwordField
+                        highlighted: root.selected !== null && !root.passwordField && !(root.showTotp && root.numberField)
                         onClicked: root.insertField("username")
                     }
                     KpxButton {
-                        width: (parent.width - backspaceList.width - 2 * Theme.paddingSmall) / 2; height: parent.height
+                        width: parent.buttonWidth; height: parent.height
                         iconSource: "image://theme/icon-m-keys"
                         text: root.t("Password")
                         active: root.selected !== null
                         highlighted: root.selected !== null && root.passwordField
                         onClicked: root.insertField("password")
+                    }
+                    KpxButton {
+                        visible: root.showTotp
+                        width: parent.buttonWidth; height: parent.height
+                        iconSource: "image://theme/icon-m-timer"
+                        text: root.t("Code (%1 s)", root.totpRemaining)
+                        highlighted: root.numberField && !root.passwordField
+                        onClicked: root.insertTotp()
                     }
                     KpxBackspaceButton {
                         id: backspaceList

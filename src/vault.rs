@@ -71,6 +71,10 @@ pub struct EntrySummary {
     pub username: String,
     pub url: String,
     pub group: String,
+    /// L'entrée a un code à usage unique (TOTP).
+    pub has_totp: bool,
+    /// Période du code en secondes (0 sans TOTP).
+    pub totp_period: u64,
 }
 
 fn read_file(path: &Path) -> Result<(Zeroizing<Vec<u8>>, Fingerprint), String> {
@@ -139,15 +143,7 @@ impl Vault {
     }
 
     pub fn summaries(&self) -> Vec<EntrySummary> {
-        self.live_entries()
-            .map(|e| EntrySummary {
-                id: e.id().to_string(),
-                title: e.get_title().unwrap_or("").to_string(),
-                username: e.get_username().unwrap_or("").to_string(),
-                url: e.get_url().unwrap_or("").to_string(),
-                group: e.parent().name.clone(),
-            })
-            .collect()
+        self.live_entries().map(|e| summary_of(&e)).collect()
     }
 
     /// Entrées correspondant à une origine (`https://site…` ou `app://identifiant`),
@@ -224,6 +220,14 @@ impl Vault {
             other => other,
         };
         Ok(e.get(key).unwrap_or("").to_string())
+    }
+
+    /// Code TOTP actuel d'une entrée : (code, secondes restantes, période).
+    pub fn totp(&self, id: &str) -> Result<(String, u64, u64), String> {
+        let e = self.find(id).ok_or("entry not found")?;
+        let spec = crate::totp::Spec::from_fields(|k| e.get(k)).ok_or("no one-time code for this entry")?;
+        let (code, remaining) = spec.code_now();
+        Ok((code, remaining, spec.period))
     }
 
     /// Vérifie que la bibliothèque réécrit la base actuelle sans perdre d'éléments XML.
@@ -311,12 +315,15 @@ fn app_tokens(app: &str) -> Vec<String> {
 }
 
 fn summary_of(e: &keepass::db::EntryRef<'_>) -> EntrySummary {
+    let totp_period = crate::totp::Spec::from_fields(|k| e.get(k)).map_or(0, |s| s.period);
     EntrySummary {
         id: e.id().to_string(),
         title: e.get_title().unwrap_or("").to_string(),
         username: e.get_username().unwrap_or("").to_string(),
         url: e.get_url().unwrap_or("").to_string(),
         group: e.parent().name.clone(),
+        has_totp: totp_period > 0,
+        totp_period,
     }
 }
 

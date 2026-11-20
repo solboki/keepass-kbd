@@ -3,6 +3,7 @@ mod generator;
 mod i18n;
 mod service;
 mod titles;
+mod totp;
 mod vault;
 
 use std::io::{BufRead, Write};

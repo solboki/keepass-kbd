@@ -27,6 +27,8 @@ pub struct Config {
     pub new_entry_group: String,
     /// Nombre de sauvegardes locales à conserver.
     pub backups_keep: usize,
+    /// Proposer les codes à usage unique (TOTP) des entrées dans le clavier.
+    pub totp_enabled: bool,
     /// Exécutables autorisés à lire la base (le clavier).
     pub allowed_callers: Vec<PathBuf>,
     /// Exécutables autorisés à modifier les réglages et verrouiller (l'application Paramètres).
@@ -43,6 +45,7 @@ impl Default for Config {
             poll_seconds: 15,
             new_entry_group: "keepass-kbd".into(),
             backups_keep: 20,
+            totp_enabled: false,
             allowed_callers: vec![PathBuf::from("/usr/bin/maliit-server")],
             settings_callers: vec![PathBuf::from("/usr/bin/jolla-settings")],
         }

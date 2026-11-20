@@ -17,6 +17,7 @@ no import, no second vault, and changes made elsewhere (KeePassXC, KeePassDX…)
 - **Search** across title, username, URL and folder, most recently used first.
 - **Password generator** (8–64 characters, lowercase / uppercase / digits / symbols), then **save** the new login: title and username are pre-filled from the current app or page, and the entry goes to a configurable folder (`keepass-kbd` by default).
 - **Safe writes** — before writing, the database is re-read and fully verified, a local backup is made, concurrent changes are detected and the file is replaced atomically. A system notification confirms the result.
+- **One-time codes (TOTP)**, optional — a *Code* button types the current two-factor code of the entry (`otp` field of KeePassXC / KeePassDX, `TimeOtp-*` fields of KeePass 2, legacy `TOTP Seed`; SHA-1/256/512, Steam). Off by default; the secret key never leaves the service.
 - **Automatic reload** when the `.kdbx` file changes on disk.
 - **Lock policy** — ask for the master password again on every restart, every 24 h / 1 h / 30 min / 5 min, or on every wake-up.
 - The master password is typed on the layout's **own mini keyboard**: it is never sent to the app in the foreground.
@@ -46,6 +47,7 @@ no import, no second vault, and changes made elsewhere (KeePassXC, KeePassDX…)
 - Switch to the **KeePass** layout like any other keyboard (long-press or swipe on the space bar, depending on your keyboard).
 - Type your master password on the mini keyboard, then ✓. Tap the eye to show it; tap anywhere in the text to move the cursor.
 - **Fill a login**: tap the entry (suggested entries are starred). Use *Username* / *Password* if the app needs it, and ⌫ to erase in the app's field.
+- **Two-factor code**: once *One-time codes (TOTP)* is enabled in the settings, entries with a TOTP show a *Code (N s)* button next to *Password*; it is highlighted when the app's field is numeric.
 - **New password**: tap **+**, adjust length and character types, tap **Use**: the password is typed into the field and the save page opens. Check title, username and URL, then *Save to KeePass*.
 - Tap the keyboard icon (top left) to go back to your previous keyboard. Closing the keyboard also returns to it.
 
@@ -69,6 +71,7 @@ no import, no second vault, and changes made elsewhere (KeePassXC, KeePassDX…)
 | `new_entry_group` | `keepass-kbd` | Folder for new entries (`Internet/Apps` for nested folders, empty for the root) |
 | `poll_seconds` | `15` | How often the file is checked for changes |
 | `backups_keep` | `20` | Number of local backups kept |
+| `totp_enabled` | `false` | Show the *Code* button for entries with a one-time code |
 
 ## Uninstall
 
@@ -107,7 +110,7 @@ Corrections and new languages are welcome — please open an issue or a pull req
 
 - [keepass-rs](https://github.com/sseemayer/keepass-rs) — KDBX reading and writing (MIT)
 - [zbus](https://github.com/dbus2/zbus) — D-Bus (MIT)
-- rust-argon2, sha2, rand, zeroize, serde, chrono, uuid (MIT / Apache-2.0)
+- rust-argon2, sha1, sha2, rand, zeroize, serde, chrono, uuid (MIT / Apache-2.0)
 - Sailfish OS, Silica and Maliit — Jolla; Qt 5 — The Qt Company
 - [FUTO Keyboard for Sailfish](https://github.com/solboki/futo-keyboard-sailfish) — current site and app detection
 - KeePass format: the KeePass project by Dominik Reichl

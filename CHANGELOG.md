@@ -6,6 +6,13 @@ after listing the changes under “Unreleased”.
 
 ## [Unreleased]
 
+## [1.1.0] - 2026-11-20
+### Added
+- One-time codes (TOTP), off by default: enable *One-time codes (TOTP)* in the settings and a *Code (N s)*
+  button types the current code of entries that have one (`otp` URI of KeePassXC / KeePassDX, KeePass 2
+  `TimeOtp-*` fields, legacy `TOTP Seed` / `TOTP Settings`; SHA-1/256/512, Steam). The secret key stays in
+  the service; only the code is sent to the keyboard (new `Totp` and `SetTotpEnabled` D-Bus methods).
+
 ## [1.0.2] - 2026-11-20
 ### Changed
 - The database file is now chosen directly in the KeePass layout (first launch and “Choose the database

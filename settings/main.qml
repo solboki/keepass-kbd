@@ -338,6 +338,18 @@ Page {
                 }
             }
 
+            TextSwitch {
+                id: totpSwitch
+                enabled: page.loaded && !page.uninstalling
+                automaticCheck: false
+                checked: !!page.settings.totp_enabled
+                text: page.t("One-time codes (TOTP)")
+                description: page.t("Adds a “Code” button to the keyboard for entries that have a two-factor code (otp field of KeePassXC and KeePassDX, TimeOtp fields of KeePass 2). The secret key never leaves the service.")
+                onClicked: daemon.typedCall("SetTotpEnabled", [{ "type": "b", "value": !checked }],
+                                            function() { page.statusText = ""; page.reload() },
+                                            function() { page.statusText = page.t("Setting not saved") })
+            }
+
             SectionHeader { text: page.t("Database") }
 
             DetailItem {

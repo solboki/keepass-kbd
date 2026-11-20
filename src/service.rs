@@ -86,6 +86,7 @@ impl Inner {
             "database": self.cfg.database.file_name().map(|s| s.to_string_lossy().to_string()),
             "entries": self.vault.as_ref().map(|v| v.entry_count()),
             "message": self.message,
+            "totp_enabled": self.cfg.totp_enabled,
         })
         .to_string()
     }
@@ -299,6 +300,7 @@ impl Service {
             "database": g.cfg.database.to_string_lossy(),
             "relock_policy": g.cfg.relock_policy,
             "new_entry_group": g.cfg.new_entry_group,
+            "totp_enabled": g.cfg.totp_enabled,
             "policies": policies,
             "state": g.state(),
             "entries": g.vault.as_ref().map(|v| v.entry_count()),
@@ -380,6 +382,25 @@ impl Service {
         g.cfg.relock_policy = policy;
         let path = g.cfg_path.clone();
         g.cfg.save(&path).map_err(failed)?;
+        Ok(true)
+    }
+
+    /// Active ou désactive les codes à usage unique (TOTP) dans le clavier.
+    async fn set_totp_enabled(
+        &self,
+        enabled: bool,
+        #[zbus(header)] hdr: Header<'_>,
+        #[zbus(connection)] conn: &zbus::Connection,
+        #[zbus(signal_emitter)] emitter: zbus::object_server::SignalEmitter<'_>,
+    ) -> fdo::Result<bool> {
+        self.check_caller(&hdr, conn, true).await?;
+        {
+            let mut g = self.shared.lock().unwrap();
+            g.cfg.totp_enabled = enabled;
+            let path = g.cfg_path.clone();
+            g.cfg.save(&path).map_err(failed)?;
+        }
+        let _ = Self::changed(&emitter).await;
         Ok(true)
     }
 
@@ -547,6 +568,27 @@ impl Service {
         g.usage.insert(id, now_secs());
         save_usage(&g.usage);
         Ok(value)
+    }
+
+    /// Code TOTP actuel d'une entrée (JSON : code, remaining, period). La clé secrète reste ici.
+    async fn totp(
+        &self,
+        id: String,
+        #[zbus(header)] hdr: Header<'_>,
+        #[zbus(connection)] conn: &zbus::Connection,
+    ) -> fdo::Result<String> {
+        self.check_caller(&hdr, conn, false).await?;
+        let g = self.shared.lock().unwrap();
+        if !g.cfg.totp_enabled {
+            return Err(failed(tr("one-time codes are disabled")));
+        }
+        let (code, remaining, period) = g
+            .vault
+            .as_ref()
+            .ok_or_else(|| failed(tr("database locked")))?
+            .totp(&id)
+            .map_err(|e| failed(tr(&e)))?;
+        Ok(json!({"code": code, "remaining": remaining, "period": period}).to_string())
     }
 
     async fn generate(
