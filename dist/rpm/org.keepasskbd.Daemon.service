@@ -1,0 +1,4 @@
+[D-BUS Service]
+Name=org.keepasskbd.Daemon
+Exec=/usr/bin/keepass-kbd daemon
+SystemdService=keepass-kbd.service

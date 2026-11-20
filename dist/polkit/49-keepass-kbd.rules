@@ -1,7 +1,7 @@
-/* Clavier KeePass : l'utilisateur qui l'a installé peut retirer ses fichiers système
- * (et uniquement eux) sans mot de passe, depuis les Paramètres. */
+/* KeePass Keyboard: regular users may remove the keyboard's own system files
+ * (and nothing else) from its settings page, without a password. */
 polkit.addRule(function(action, subject) {
-    if (action.id === "org.keepasskbd.uninstall" && subject.user === "@USER@")
+    if (action.id === "org.keepasskbd.uninstall" && subject.isInGroup("users"))
         return polkit.Result.YES;
     return polkit.Result.NOT_HANDLED;
 });

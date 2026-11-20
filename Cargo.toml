@@ -1,9 +1,11 @@
 [package]
 name = "keepass-kbd"
 authors = ["Boris Solodki <solboki@solodki.fr>"]
-description = "Disposition clavier KeePass pour Sailfish OS"
-license = "MIT"
-version = "0.11.0"
+description = "KeePass password keyboard for Sailfish OS: fill, generate and save logins from your .kdbx database"
+license = "GPL-3.0-or-later"
+repository = "https://github.com/solboki/keepass-kbd"
+readme = "README.md"
+version = "1.0.0"
 edition = "2024"
 
 [dependencies]
@@ -18,3 +20,39 @@ sha2 = "0.11.1"
 uuid = "1.29.3"
 zbus = { version = "5", default-features = false, features = ["blocking-api", "async-io"] }
 zeroize = "1.9.2"
+
+[package.metadata.generate-rpm]
+name = "keepass-kbd"
+summary = "KeePass password keyboard for Sailfish OS"
+vendor = "Boris Solodki"
+release = "1"
+auto-req = "no"
+requires = { jolla-keyboard = "*", maliit-framework-wayland = "*", sailfishsilica-qt5 = "*", nemo-qml-plugin-dbus-qt5 = "*", polkit = "*", sailfish-components-pickers-qt5 = "*", glib2 = "*" }
+post_install_script = "dist/rpm/post-install.sh"
+pre_uninstall_script = "dist/rpm/pre-uninstall.sh"
+post_uninstall_script = "dist/rpm/post-uninstall.sh"
+assets = [
+    { source = "target/release/keepass-kbd", dest = "/usr/bin/keepass-kbd", mode = "755" },
+    { source = "target/rpm-stage/qml-keepass.qml", dest = "/usr/share/maliit/plugins/com/jolla/layouts/keepass.qml", mode = "644" },
+    { source = "qml/KpxButton.qml", dest = "/usr/share/maliit/plugins/com/jolla/layouts/KpxButton.qml", mode = "644" },
+    { source = "qml/KpxMiniKeyboard.qml", dest = "/usr/share/maliit/plugins/com/jolla/layouts/KpxMiniKeyboard.qml", mode = "644" },
+    { source = "qml/KpxBackspaceButton.qml", dest = "/usr/share/maliit/plugins/com/jolla/layouts/KpxBackspaceButton.qml", mode = "644" },
+    { source = "qml/KpxLineField.qml", dest = "/usr/share/maliit/plugins/com/jolla/layouts/KpxLineField.qml", mode = "644" },
+    { source = "qml/KpxStrings.js", dest = "/usr/share/maliit/plugins/com/jolla/layouts/KpxStrings.js", mode = "644" },
+    { source = "dist/layouts_keepass.conf", dest = "/usr/share/maliit/plugins/com/jolla/layouts/layouts_keepass.conf", mode = "644" },
+    { source = "qml/handlers/KeepassInputHandler.qml", dest = "/usr/share/maliit/plugins/com/jolla/handlers/KeepassInputHandler.qml", mode = "644" },
+    { source = "target/rpm-stage/settings-main.qml", dest = "/usr/share/jolla-settings/pages/keepass-kbd/main.qml", mode = "644" },
+    { source = "settings/KeepassTextInputSettings.qml", dest = "/usr/share/jolla-settings/pages/keepass-kbd/KeepassTextInputSettings.qml", mode = "644" },
+    { source = "qml/KpxStrings.js", dest = "/usr/share/jolla-settings/pages/keepass-kbd/KpxStrings.js", mode = "644" },
+    { source = "settings/keepass-kbd.json", dest = "/usr/share/jolla-settings/entries/keepass-kbd.json", mode = "644" },
+    { source = "target/rpm-stage/settings-keepass-kbd*.qm", dest = "/usr/share/translations/", mode = "644" },
+    { source = "assets/keepass-kbd-256.png", dest = "/usr/share/keepass-kbd/keepass-kbd.png", mode = "644" },
+    { source = "assets/keepass-kbd-86.png", dest = "/usr/share/icons/hicolor/86x86/apps/keepass-kbd.png", mode = "644" },
+    { source = "dist/rpm/keepass-kbd.service", dest = "/usr/lib/systemd/user/keepass-kbd.service", mode = "644" },
+    { source = "dist/rpm/org.keepasskbd.Daemon.service", dest = "/usr/share/dbus-1/services/org.keepasskbd.Daemon.service", mode = "644" },
+    { source = "dist/uninstall/uninstall", dest = "/usr/libexec/keepass-kbd/uninstall", mode = "755" },
+    { source = "dist/uninstall/uninstall-system", dest = "/usr/libexec/keepass-kbd/uninstall-system", mode = "755" },
+    { source = "dist/polkit/org.keepasskbd.policy", dest = "/usr/share/polkit-1/actions/org.keepasskbd.policy", mode = "644" },
+    { source = "dist/polkit/49-keepass-kbd.rules", dest = "/usr/share/polkit-1/rules.d/49-keepass-kbd.rules", mode = "644" },
+    { source = "LICENSE", dest = "/usr/share/licenses/keepass-kbd/LICENSE", mode = "644" },
+]

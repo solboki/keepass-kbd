@@ -1,112 +1,101 @@
-# Journal des versions — Clavier KeePass pour Sailfish OS
+# Changelog — KeePass Keyboard for Sailfish OS
 
-Numérotation [SemVer](https://semver.org/lang/fr/) : correctif → `patch`, fonctionnalité → `minor`,
-changement incompatible → `major`. Passage en 1.0.0 à la première diffusion publique.
-Incrémenter avec `scripts/bump-version.sh patch|minor|major`.
+Versioning follows [SemVer](https://semver.org): bug fix → `patch`, feature → `minor`,
+incompatible change → `major`. Bump with `scripts/bump-version.sh patch|minor|major`
+after listing the changes under “Unreleased”.
 
-## [Non publié]
+## [Unreleased]
+
+## [1.0.0] - 2026-11-20
+First public release.
+### Added
+- RPM package (`scripts/build-rpm.sh`, built with cargo-generate-rpm): files installed under `/usr`,
+  service started on demand through D-Bus activation, layout enabled on install and removed on uninstall.
+- English documentation, GPL-3.0-or-later license.
+### Changed
+- No default database: choose your `.kdbx` file in the settings page.
+- Uninstall from the settings page removes the package (`rpm -e`) or a manual install.
+- Polkit rule for the uninstall script limited to regular users (`users` group).
 
 ## [0.11.0] - 2026-11-20
-### Ajouté
-- Localisation : anglais (par défaut), français, allemand, espagnol, italien, finnois, suédois,
-  néerlandais et russe, selon la langue du téléphone (interface, Paramètres, messages du service).
-- Mini-clavier adapté à la langue (AZERTY, QWERTZ ou QWERTY, accents de la langue).
-- Désinstallation depuis les Paramètres, avec options pour supprimer réglages et sauvegardes ;
-  script système lancé par pkexec (règle polkit limitée à l'utilisateur qui a installé).
-- `scripts/mkqm.py` : génération des catalogues Qt `.qm` sans lrelease.
-### Corrigé
-- Mot de passe maître et champs du formulaire : le curseur se place à l'endroit touché (et en glissant) ;
-  saisie et effacement se font à sa position.
+### Added
+- Localisation: English (default), French, German, Spanish, Italian, Finnish, Swedish, Dutch, Russian,
+  following the phone language (keyboard, settings, service messages).
+- Mini keyboard adapted to the language (AZERTY, QWERTZ or QWERTY, language accents).
+- Uninstall from the settings page, optionally deleting settings and backups.
+- `scripts/mkqm.py`: Qt `.qm` catalogs without lrelease.
+### Fixed
+- Master password and form fields: the cursor can be placed by tapping (or dragging); typing and erasing happen at the cursor.
 
 ## [0.10.0] - 2026-11-20
-### Ajouté
-- Icône du Clavier KeePass (Boris Solodki), utilisée pour les notifications
-  (`assets/`, installée dans `/usr/share/keepass-kbd/` et `/usr/share/icons/hicolor/86x86/apps/`).
-### Modifié
-- Générateur : « Insérer » et « Enregistrer… » fusionnés en un bouton « Utiliser », qui insère
-  le mot de passe puis ouvre la page de vérification et d'enregistrement.
+### Added
+- Application icon, used for notifications.
+### Changed
+- Generator: “Insert” and “Save…” merged into a single **Use** button that types the password and opens the save page.
 
 ## [0.9.0] - 2026-11-20
-### Ajouté
-- Paramètres : choix du dossier des nouvelles entrées parmi ceux de la base, ou nouveau dossier
-  (chemins imbriqués « Internet/Applis » acceptés).
-- Le dossier de destination est créé automatiquement au premier enregistrement s'il n'existe pas.
-### Modifié
-- Dossier par défaut des nouvelles entrées : « keepass-kbd » (au lieu de la racine).
+### Added
+- Settings: choose the folder for new entries (existing or new, nested paths allowed); created on first save.
+### Changed
+- New entries go to a `keepass-kbd` folder by default instead of the root.
 
 ## [0.8.1] - 2026-11-20
-### Corrigé
-- Enregistrement refusé sur les bases KeePassXC : le test de fidélité admet désormais deux
-  différences sans effet (`HeaderHash` obsolète en KDBX 4, `QualityCheck` par défaut rendu explicite).
-- Enregistrement trop long pour l'appel D-Bus sur les bases à dérivation de clé lourde : la préparation
-  et l'écriture se font en arrière-plan, le résultat est annoncé par notification.
-### Modifié
-- Après « Enregistrer », le clavier revient à la disposition précédente et se ferme.
-- Test de fidélité lancé à l'avance, après chaque déverrouillage ou rechargement de la base.
-- Causes d'échec d'enregistrement consignées dans `~/.local/share/keepass-kbd/errors.log` (sans secret).
+### Fixed
+- Saving refused on KeePassXC databases: two harmless differences are now tolerated by the fidelity check
+  (obsolete KDBX 3 `HeaderHash`, explicit default `QualityCheck`).
+- Saving too slow for the D-Bus call on databases with a heavy key derivation: preparation and writing run
+  in the background and the result is reported by a notification.
+### Changed
+- After saving, the keyboard returns to the previous layout and closes.
+- Fidelity check run in advance after each unlock or reload.
+- Save failures logged to `~/.local/share/keepass-kbd/errors.log` (no secrets).
 
 ## [0.8.0] - 2026-11-20
-### Ajouté
-- Création d'entrée : titre proposé (nom de l'application lu dans son .desktop, ou nom du site)
-  et identifiant repris de la page (mémorisé par FUTO, sinon suivi de secours en mémoire vive).
-- Notification système en haut de l'écran après l'enregistrement (ou en cas d'échec).
-- `KEEPASS_KBD_DATA_DIR` pour isoler les données des tests.
-### Modifié
-- Formulaire d'enregistrement au style Sailfish : titre, identifiant, mot de passe masqué (œil), URL,
-  puis bouton d'enregistrement, l'un sous l'autre.
+### Added
+- New entry: title suggested from the app's `.desktop` name or the website, username reused from the page.
+- System notification after saving (or on failure).
+### Changed
+- Save form in Sailfish style: title, username, hidden password (eye), URL, then the save button.
 
 ## [0.7.1] - 2026-11-20
-### Corrigé
-- Entrée « Clavier KeePass » absente de Paramètres › Entrée de texte : la clé `settings=` n'est lue
-  que si la disposition déclare un gestionnaire de saisie (`KeepassInputHandler.qml`).
-### Modifié
-- L'engrenage reste toujours aligné sur le bord droit, quel que soit l'écran affiché.
+### Fixed
+- “KeePass Keyboard” entry missing from *Settings › Text input* (the `settings=` key needs an input handler).
+### Changed
+- The gear icon always stays on the right edge.
 
 ## [0.7.0] - 2026-11-20
-### Ajouté
-- Entrée « Clavier KeePass » dans Paramètres › Saisie de texte (clé `settings=` de la disposition).
-- Numérotation des versions : version unique dans `Cargo.toml`, recopiée à l'installation, journal et script d'incrémentation.
-### Modifié
-- Saisie du mot de passe maître au style Sailfish : texte, trait de la couleur du thème, libellé discret dessous.
-- Bouton de validation rectangulaire et compact.
-### Corrigé
-- Page Paramètres : « service injoignable » (l'application Paramètres tourne avec le groupe `privileged`).
+### Added
+- “KeePass Keyboard” entry in *Settings › Text input*; versioning tools and changelog.
+### Changed
+- Master password field in Sailfish style; compact rectangular confirm button.
+### Fixed
+- Settings page could not reach the service (the Settings app runs with the `privileged` group).
 
 ## [0.6.0] - 2026-11-20
-### Ajouté
-- Touche d'effacement dans le champ de l'application (appui long répété).
-- Page Paramètres : délai avant de redemander le mot de passe maître, choix du fichier .kdbx, à propos, crédits.
-- Engrenage dans la disposition pour ouvrir les Paramètres.
-### Modifié
-- Icône « + » pour le générateur.
-- Reverrouillage compté depuis le déverrouillage (`relock_policy`).
+### Added
+- Backspace key acting on the app's field; settings page (lock policy, database file, about, credits); gear icon.
+### Changed
+- “+” icon for the generator; relock timed from unlocking.
 
 ## [0.5.0] - 2026-11-20
-### Ajouté
-- Retour automatique à la disposition précédente à la fermeture du clavier.
-- Suggestions pour les applications AppSupport d'après les segments du nom de paquet.
+### Added
+- Return to the previous layout when the keyboard closes; suggestions for AppSupport apps from the package name.
 
 ## [0.4.0] - 2026-11-20
-### Ajouté
-- Suggestions selon le site ou l'application au premier plan.
-- Interface graphique : icônes Sailfish, avatars, générateur coloré, œil de mot de passe.
-### Modifié
-- Plus de verrouillage à la mise en veille par défaut.
+### Added
+- Suggestions for the current website or app; graphical interface (icons, avatars, coloured generator, eye).
 
 ## [0.3.0] - 2026-11-20
-### Ajouté
-- Remplissage automatique identifiant + mot de passe en touchant une entrée.
-- Affichage du mot de passe maître, verrouillage à la mise en veille.
-### Modifié
-- Présentation : recherche, propositions, puis boutons d'insertion.
+### Added
+- One-tap fill of username and password; show master password.
+### Changed
+- Layout: search, suggestions, then insert buttons.
 
 ## [0.2.0] - 2026-11-20
-### Corrigé
-- Mini-clavier absent sur l'écran de déverrouillage.
-- Nom D-Bus exclusif : le service ne peut plus être remplacé par un autre processus.
+### Fixed
+- Mini keyboard missing on the unlock screen; exclusive D-Bus name.
 
 ## [0.1.0] - 2026-11-20
-### Ajouté
-- Service `keepass-kbd` (Rust) : lecture directe du .kdbx, rechargement automatique, générateur,
-  ajout d'entrées avec écriture vérifiée et sauvegardes.
-- Disposition clavier « KeePass » pour Maliit.
+### Added
+- `keepass-kbd` service (Rust): direct `.kdbx` access, automatic reload, generator, verified writes with backups.
+- “KeePass” Maliit keyboard layout.

@@ -36,6 +36,7 @@ pub struct Config {
 impl Default for Config {
     fn default() -> Self {
         Config {
+            // Aucune base par défaut : à choisir dans Paramètres › Entrée de texte › Clavier KeePass.
             database: PathBuf::new(),
             keyfile: None,
             relock_policy: "30min".into(),

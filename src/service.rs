@@ -73,7 +73,7 @@ impl Inner {
     pub fn state(&self) -> &'static str {
         if self.vault.is_some() {
             "unlocked"
-        } else if !self.cfg.database.exists() {
+        } else if self.cfg.database.as_os_str().is_empty() || !self.cfg.database.is_file() {
             "missing"
         } else {
             "locked"

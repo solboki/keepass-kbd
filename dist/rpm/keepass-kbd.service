@@ -1,0 +1,10 @@
+[Unit]
+Description=KeePass Keyboard service (keepass-kbd)
+After=dbus.socket
+
+[Service]
+Type=dbus
+BusName=org.keepasskbd.Daemon
+ExecStart=/usr/bin/keepass-kbd daemon
+Restart=on-failure
+RestartSec=5

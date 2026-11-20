@@ -14,9 +14,9 @@ case "$1" in
     [0-9]*.[0-9]*.[0-9]*) NEW="$1" ;;
     *) echo "usage : $0 patch|minor|major|X.Y.Z  (actuelle : $CUR)"; exit 1 ;;
 esac
-grep -q "^## \[Non publié\]" CHANGELOG.md || { echo "CHANGELOG.md : section « [Non publié] » manquante"; exit 1; }
+grep -q "^## \[Unreleased\]" CHANGELOG.md || { echo "CHANGELOG.md : missing "[Unreleased]" section"; exit 1; }
 sed -i "s/^version = \"$CUR\"/version = \"$NEW\"/" Cargo.toml
-sed -i "s/^## \[Non publié\]/## [Non publié]\n\n## [$NEW] - $(date +%Y-%m-%d)/" CHANGELOG.md
+sed -i "s/^## \[Unreleased\]/## [Unreleased]\n\n## [$NEW] - $(date +%Y-%m-%d)/" CHANGELOG.md
 cargo build --release -q
 git add -A
 git commit -q -m "Version $NEW"

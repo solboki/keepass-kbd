@@ -2,6 +2,12 @@
 # Clavier KeePass — retrait des fichiers système (root, via pkexec ou devel-su).
 # --check : vérifie seulement l'accès (aucune suppression).
 if [ "$1" = "--check" ]; then echo "accès root : $(id -u)"; exit 0; fi
+# Installation par paquet : rpm retire tous les fichiers (et ses scripts nettoient les sessions).
+if rpm -q keepass-kbd >/dev/null 2>&1; then
+    rpm -e keepass-kbd && echo "Paquet keepass-kbd désinstallé"
+    exit $?
+fi
+# Installation manuelle (scripts du dépôt) :
 LAYOUTS=/usr/share/maliit/plugins/com/jolla/layouts
 rm -f "$LAYOUTS/keepass.qml" "$LAYOUTS/KpxButton.qml" "$LAYOUTS/KpxMiniKeyboard.qml" \
       "$LAYOUTS/KpxBackspaceButton.qml" "$LAYOUTS/KpxLineField.qml" "$LAYOUTS/KpxStrings.js" \
@@ -13,5 +19,6 @@ rm -f /usr/share/translations/settings-keepass-kbd*.qm
 rm -rf /usr/share/keepass-kbd
 rm -f /usr/share/icons/hicolor/86x86/apps/keepass-kbd.png
 rm -f /usr/share/polkit-1/actions/org.keepasskbd.policy /usr/share/polkit-1/rules.d/49-keepass-kbd.rules
+rm -f /usr/bin/keepass-kbd /usr/lib/systemd/user/keepass-kbd.service /usr/share/dbus-1/services/org.keepasskbd.Daemon.service
 rm -rf /usr/libexec/keepass-kbd
 echo "Fichiers système du Clavier KeePass retirés"

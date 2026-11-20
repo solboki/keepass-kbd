@@ -1,34 +1,26 @@
 #!/bin/sh
-# Clavier KeePass — désinstallation complète (utilisateur), lancée depuis les Paramètres.
+# KeePass Keyboard — complete uninstall, started from its settings page.
 #   uninstall [--remove-settings] [--remove-backups]
-# Le fichier .kdbx n'est jamais touché.
+# The .kdbx database is never touched.
 LOG="$HOME/.cache/keepass-kbd-uninstall.log"
 mkdir -p "$HOME/.cache"; exec >"$LOG" 2>&1
 REMOVE_SETTINGS=0; REMOVE_BACKUPS=0
 for a in "$@"; do
     case "$a" in --remove-settings) REMOVE_SETTINGS=1 ;; --remove-backups) REMOVE_BACKUPS=1 ;; esac
 done
-echo "Désinstallation du Clavier KeePass — $(date)"
+echo "KeePass Keyboard uninstall — $(date)"
 
-# 1. Retirer la disposition des dispositions actives (et de la disposition courante).
+# 1. Remove the layout from the enabled keyboards (and from the active one).
 CUR=$(dconf read /sailfish/text_input/enabled_layouts)
 NEW=$(echo "$CUR" | sed "s/, *'keepass.qml'//; s/'keepass.qml', *//; s/'keepass.qml'//")
-[ "$NEW" = "[]" ] || [ -z "$NEW" ] && NEW="['futo.qml']"
+{ [ "$NEW" = "[]" ] || [ -z "$NEW" ]; } && NEW="['en.qml']"
 dconf write /sailfish/text_input/enabled_layouts "$NEW"
 if [ "$(dconf read /sailfish/text_input/active_layout)" = "'keepass.qml'" ]; then
     FIRST=$(echo "$NEW" | sed "s/^\[ *'\([^']*\)'.*/\1/")
     dconf write /sailfish/text_input/active_layout "'$FIRST'"
 fi
 
-# 2. Fichiers système (règle polkit : sans mot de passe pour l'utilisateur qui a installé).
-pkexec /usr/libexec/keepass-kbd/uninstall-system || echo "pkexec a échoué : lancer  devel-su sh /usr/libexec/keepass-kbd/uninstall-system"
-
-# 3. Service utilisateur et exécutable.
-systemctl --user disable --now keepass-kbd.service
-rm -f "$HOME/.config/systemd/user/keepass-kbd.service" "$HOME/.local/bin/keepass-kbd"
-systemctl --user daemon-reload
-
-# 4. Données facultatives.
+# 2. Optional user data.
 [ "$REMOVE_SETTINGS" = 1 ] && rm -rf "$HOME/.config/keepass-kbd"
 if [ "$REMOVE_BACKUPS" = 1 ]; then
     rm -rf "$HOME/.local/share/keepass-kbd"
@@ -36,12 +28,18 @@ else
     rm -f "$HOME/.local/share/keepass-kbd/usage.json"
 fi
 
-# 5. Recharger le clavier.
-systemctl --user restart maliit-server.service
+# 3. Leftovers of a manual (developer) install.
+systemctl --user disable --now keepass-kbd.service 2>/dev/null
+rm -f "$HOME/.config/systemd/user/keepass-kbd.service" "$HOME/.local/bin/keepass-kbd"
+systemctl --user daemon-reload
 
-# 6. Confirmation.
+# 4. Confirmation, then system files (package removal or manual cleanup) via polkit.
 gdbus call --session --dest org.freedesktop.Notifications --object-path /org/freedesktop/Notifications \
-    --method org.freedesktop.Notifications.Notify "Clavier KeePass" 0 "icon-lock-information" \
-    "Clavier KeePass désinstallé" "Votre base KeePass n'a pas été modifiée." "[]" \
-    "{'x-nemo-preview-summary': <'Clavier KeePass désinstallé'>, 'x-nemo-preview-body': <'Votre base KeePass n\\'a pas été modifiée.'>}" 5000 >/dev/null
-echo "Terminé"
+    --method org.freedesktop.Notifications.Notify "KeePass Keyboard" 0 "icon-lock-information" \
+    "KeePass Keyboard" "Uninstalling… your KeePass database is not modified." "[]" \
+    "{'x-nemo-preview-summary': <'KeePass Keyboard'>, 'x-nemo-preview-body': <'Uninstalling… your KeePass database is not modified.'>}" 5000 >/dev/null
+pkexec /usr/libexec/keepass-kbd/uninstall-system || echo "pkexec failed: run  devel-su sh /usr/libexec/keepass-kbd/uninstall-system"
+
+# 5. Reload the keyboard.
+systemctl --user restart maliit-server.service
+echo "Done"
