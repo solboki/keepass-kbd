@@ -1,0 +1,47 @@
+#!/bin/sh
+# Clavier KeePass — désinstallation complète (utilisateur), lancée depuis les Paramètres.
+#   uninstall [--remove-settings] [--remove-backups]
+# Le fichier .kdbx n'est jamais touché.
+LOG="$HOME/.cache/keepass-kbd-uninstall.log"
+mkdir -p "$HOME/.cache"; exec >"$LOG" 2>&1
+REMOVE_SETTINGS=0; REMOVE_BACKUPS=0
+for a in "$@"; do
+    case "$a" in --remove-settings) REMOVE_SETTINGS=1 ;; --remove-backups) REMOVE_BACKUPS=1 ;; esac
+done
+echo "Désinstallation du Clavier KeePass — $(date)"
+
+# 1. Retirer la disposition des dispositions actives (et de la disposition courante).
+CUR=$(dconf read /sailfish/text_input/enabled_layouts)
+NEW=$(echo "$CUR" | sed "s/, *'keepass.qml'//; s/'keepass.qml', *//; s/'keepass.qml'//")
+[ "$NEW" = "[]" ] || [ -z "$NEW" ] && NEW="['futo.qml']"
+dconf write /sailfish/text_input/enabled_layouts "$NEW"
+if [ "$(dconf read /sailfish/text_input/active_layout)" = "'keepass.qml'" ]; then
+    FIRST=$(echo "$NEW" | sed "s/^\[ *'\([^']*\)'.*/\1/")
+    dconf write /sailfish/text_input/active_layout "'$FIRST'"
+fi
+
+# 2. Fichiers système (règle polkit : sans mot de passe pour l'utilisateur qui a installé).
+pkexec /usr/libexec/keepass-kbd/uninstall-system || echo "pkexec a échoué : lancer  devel-su sh /usr/libexec/keepass-kbd/uninstall-system"
+
+# 3. Service utilisateur et exécutable.
+systemctl --user disable --now keepass-kbd.service
+rm -f "$HOME/.config/systemd/user/keepass-kbd.service" "$HOME/.local/bin/keepass-kbd"
+systemctl --user daemon-reload
+
+# 4. Données facultatives.
+[ "$REMOVE_SETTINGS" = 1 ] && rm -rf "$HOME/.config/keepass-kbd"
+if [ "$REMOVE_BACKUPS" = 1 ]; then
+    rm -rf "$HOME/.local/share/keepass-kbd"
+else
+    rm -f "$HOME/.local/share/keepass-kbd/usage.json"
+fi
+
+# 5. Recharger le clavier.
+systemctl --user restart maliit-server.service
+
+# 6. Confirmation.
+gdbus call --session --dest org.freedesktop.Notifications --object-path /org/freedesktop/Notifications \
+    --method org.freedesktop.Notifications.Notify "Clavier KeePass" 0 "icon-lock-information" \
+    "Clavier KeePass désinstallé" "Votre base KeePass n'a pas été modifiée." "[]" \
+    "{'x-nemo-preview-summary': <'Clavier KeePass désinstallé'>, 'x-nemo-preview-body': <'Votre base KeePass n\\'a pas été modifiée.'>}" 5000 >/dev/null
+echo "Terminé"

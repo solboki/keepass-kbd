@@ -1,9 +1,12 @@
 /* Entrée affichée dans Paramètres › Entrée de texte quand la disposition KeePass est active. */
 import QtQuick 2.0
 import Sailfish.Silica 1.0
+import "KpxStrings.js" as S
 
 Column {
+    id: entryColumn
     width: parent ? parent.width : 0
+    readonly property string lang: S.lang(Qt.locale().name)
 
     SectionHeader { text: "KeePass" }
 
@@ -24,13 +27,13 @@ Column {
                       verticalCenter: parent.verticalCenter }
             Label {
                 width: parent.width
-                text: "Clavier KeePass"
+                text: S.tr(entryColumn.lang, "KeePass Keyboard")
                 color: parent.parent.highlighted ? Theme.highlightColor : Theme.primaryColor
                 truncationMode: TruncationMode.Fade
             }
             Label {
                 width: parent.width
-                text: "Base de mots de passe, verrouillage, à propos"
+                text: S.tr(entryColumn.lang, "Password database, locking, about")
                 font.pixelSize: Theme.fontSizeExtraSmall
                 color: parent.parent.highlighted ? Theme.secondaryHighlightColor : Theme.secondaryColor
                 truncationMode: TruncationMode.Fade

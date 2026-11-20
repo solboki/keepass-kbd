@@ -6,6 +6,18 @@ Incrémenter avec `scripts/bump-version.sh patch|minor|major`.
 
 ## [Non publié]
 
+## [0.11.0] - 2026-11-20
+### Ajouté
+- Localisation : anglais (par défaut), français, allemand, espagnol, italien, finnois, suédois,
+  néerlandais et russe, selon la langue du téléphone (interface, Paramètres, messages du service).
+- Mini-clavier adapté à la langue (AZERTY, QWERTZ ou QWERTY, accents de la langue).
+- Désinstallation depuis les Paramètres, avec options pour supprimer réglages et sauvegardes ;
+  script système lancé par pkexec (règle polkit limitée à l'utilisateur qui a installé).
+- `scripts/mkqm.py` : génération des catalogues Qt `.qm` sans lrelease.
+### Corrigé
+- Mot de passe maître et champs du formulaire : le curseur se place à l'endroit touché (et en glissant) ;
+  saisie et effacement se font à sa position.
+
 ## [0.10.0] - 2026-11-20
 ### Ajouté
 - Icône du Clavier KeePass (Boris Solodki), utilisée pour les notifications

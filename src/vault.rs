@@ -74,7 +74,7 @@ pub struct EntrySummary {
 }
 
 fn read_file(path: &Path) -> Result<(Zeroizing<Vec<u8>>, Fingerprint), String> {
-    let bytes = fs::read(path).map_err(|e| format!("lecture de {} : {e}", path.display()))?;
+    let bytes = fs::read(path).map_err(|e| format!("reading {}: {e}", path.display()))?;
     let meta = fs::metadata(path).map_err(|e| format!("stat : {e}"))?;
     let fp = Fingerprint::of_bytes(&bytes, &meta);
     Ok((Zeroizing::new(bytes), fp))
@@ -83,9 +83,9 @@ fn read_file(path: &Path) -> Result<(Zeroizing<Vec<u8>>, Fingerprint), String> {
 pub fn open_err(e: keepass::db::DatabaseOpenError) -> String {
     let s = e.to_string();
     if s.to_lowercase().contains("key") || s.to_lowercase().contains("hmac") {
-        "mot de passe maître ou fichier clé incorrect".to_string()
+        crate::i18n::tr("incorrect master password or key file")
     } else {
-        format!("ouverture impossible : {s}")
+        format!("cannot open the database: {s}")
     }
 }
 
@@ -214,7 +214,7 @@ impl Vault {
     }
 
     pub fn field(&self, id: &str, field: &str) -> Result<String, String> {
-        let e = self.find(id).ok_or("entrée introuvable")?;
+        let e = self.find(id).ok_or("entry not found")?;
         let key = match field {
             "username" => "UserName",
             "password" => "Password",
@@ -260,11 +260,11 @@ impl Vault {
     /// écriture dans un temporaire relu puis renommage atomique.
     pub fn commit(&mut self, snap: &Snapshot, prepared: Prepared, backup_dir: &Path, backups_keep: usize) -> Result<String, String> {
         if self.fingerprint.sha256 != snap.sha256 {
-            return Err("la base a été rechargée pendant l'enregistrement. Réessayez.".into());
+            return Err(crate::i18n::tr("the database was reloaded during the save. Try again."));
         }
         let (_, now_fp) = read_file(&self.path)?;
         if now_fp.sha256 != snap.sha256 {
-            return Err("la base a été modifiée ailleurs pendant l'enregistrement. Réessayez.".into());
+            return Err(crate::i18n::tr("the database was modified elsewhere during the save. Try again."));
         }
         backup(&self.raw, backup_dir, backups_keep)?;
         let out = &prepared.bytes;
@@ -273,22 +273,22 @@ impl Vault {
             self.path.file_name().and_then(|s| s.to_str()).unwrap_or("db")
         ));
         {
-            let mut f = fs::File::create(&tmp).map_err(|e| format!("création du temporaire : {e}"))?;
-            f.write_all(out).map_err(|e| format!("écriture : {e}"))?;
-            f.sync_all().map_err(|e| format!("synchronisation : {e}"))?;
+            let mut f = fs::File::create(&tmp).map_err(|e| format!("creating the temporary file: {e}"))?;
+            f.write_all(out).map_err(|e| format!("writing: {e}"))?;
+            f.sync_all().map_err(|e| format!("syncing: {e}"))?;
         }
-        let written = fs::read(&tmp).map_err(|e| format!("relecture du temporaire : {e}"))?;
+        let written = fs::read(&tmp).map_err(|e| format!("re-reading the temporary file: {e}"))?;
         if written != **out {
             let _ = fs::remove_file(&tmp);
-            return Err("le fichier temporaire relu ne correspond pas. Rien n'a été remplacé.".into());
+            return Err("the re-read temporary file does not match. Nothing was replaced.".into());
         }
         fs::rename(&tmp, &self.path).map_err(|e| {
             let _ = fs::remove_file(&tmp);
-            format!("remplacement du fichier : {e}")
+            format!("replacing the file: {e}")
         })?;
         let (raw, fp) = read_file(&self.path)?;
         if *raw != **out {
-            return Err("le fichier final relu diffère de ce qui a été écrit (sauvegarde disponible).".into());
+            return Err("the final file differs from what was written (backup available).".into());
         }
         self.db = prepared.db;
         self.raw = raw;
@@ -384,7 +384,7 @@ fn contains(hay: &[u8], needle: &[u8]) -> bool {
 pub fn check_fidelity(raw: &[u8], db: &Database, key: &DatabaseKey) -> Result<(), String> {
     let original_xml = Zeroizing::new(Database::get_xml(&mut &raw[..], key.clone()).map_err(open_err)?);
     let mut resaved = Zeroizing::new(Vec::new());
-    db.save(&mut *resaved, key.clone()).map_err(|e| format!("sérialisation : {e}"))?;
+    db.save(&mut *resaved, key.clone()).map_err(|e| format!("serialisation: {e}"))?;
     let resaved_xml = Zeroizing::new(Database::get_xml(&mut &resaved[..], key.clone()).map_err(open_err)?);
     let kdbx4 = matches!(db.config.version, keepass::config::DatabaseVersion::KDB4(_));
     let before = tag_histogram(&original_xml);
@@ -397,14 +397,14 @@ pub fn check_fidelity(raw: &[u8], db: &Database, key: &DatabaseKey) -> Result<()
         })
         .collect();
     if !diff.is_empty() {
-        return Err(format!(
-            "la réécriture perdrait ou modifierait des éléments de la base ({}). Écriture refusée.",
-            diff.join(", ")
+        return Err(crate::i18n::tr1(
+            "rewriting would lose or alter database elements (%1). Write refused.",
+            &diff.join(", "),
         ));
     }
     let reparsed = Database::parse(&resaved, key.clone()).map_err(open_err)?;
     if reparsed != *db {
-        return Err("la base relue après réécriture diffère de l'originale. Écriture refusée.".into());
+        return Err("the database re-read after rewriting differs from the original. Write refused.".into());
     }
     Ok(())
 }
@@ -425,7 +425,7 @@ pub fn prepare_add(
     let mut modified = snap.db.clone();
     let group = ensure_group(&mut modified, group_path)?;
     let id = {
-        let mut g = modified.group_mut(group).ok_or("groupe cible introuvable")?;
+        let mut g = modified.group_mut(group).ok_or("target group not found")?;
         let mut e = g.add_entry();
         e.set_unprotected("Title", title);
         e.set_unprotected("UserName", username);
@@ -435,10 +435,10 @@ pub fn prepare_add(
         e.id()
     };
     let mut out = Zeroizing::new(Vec::new());
-    modified.save(&mut *out, snap.key.clone()).map_err(|e| format!("sérialisation : {e}"))?;
+    modified.save(&mut *out, snap.key.clone()).map_err(|e| format!("serialisation: {e}"))?;
     let reparsed = Database::parse(&out, snap.key.clone()).map_err(open_err)?;
     if reparsed != modified {
-        return Err("vérification après écriture en mémoire échouée. Rien n'a été écrit.".into());
+        return Err("in-memory verification after writing failed. Nothing was written.".into());
     }
     Ok(Prepared { db: modified, bytes: out, id: id.to_string() })
 }
@@ -454,7 +454,7 @@ fn ensure_group(db: &mut Database, path: &str) -> Result<GroupId, String> {
         current = match existing {
             Some(id) => id,
             None => {
-                let mut parent = db.group_mut(current).ok_or("groupe parent introuvable")?;
+                let mut parent = db.group_mut(current).ok_or("parent group not found")?;
                 let mut g = parent.add_group();
                 g.name = part.to_string();
                 g.id()
@@ -484,11 +484,11 @@ pub fn group_paths(db: &Database) -> Vec<String> {
 }
 
 fn backup(raw: &[u8], dir: &Path, keep: usize) -> Result<(), String> {
-    fs::create_dir_all(dir).map_err(|e| format!("dossier de sauvegarde : {e}"))?;
+    fs::create_dir_all(dir).map_err(|e| format!("backup folder: {e}"))?;
     let name = chrono::Local::now().format("%Y%m%d-%H%M%S%.3f.kdbx").to_string();
-    fs::write(dir.join(name), raw).map_err(|e| format!("sauvegarde : {e}"))?;
+    fs::write(dir.join(name), raw).map_err(|e| format!("backup: {e}"))?;
     let mut files: Vec<PathBuf> = fs::read_dir(dir)
-        .map_err(|e| format!("sauvegardes : {e}"))?
+        .map_err(|e| format!("backups: {e}"))?
         .filter_map(|e| e.ok().map(|e| e.path()))
         .filter(|p| p.extension().is_some_and(|x| x == "kdbx"))
         .collect();

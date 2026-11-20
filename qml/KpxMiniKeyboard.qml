@@ -3,6 +3,7 @@
 // jamais envoyé à l'application au premier plan.
 import QtQuick 2.0
 import Sailfish.Silica 1.0
+import "KpxStrings.js" as S
 
 Column {
     id: kb
@@ -15,14 +16,16 @@ Column {
     signal backspace()
     signal accepted()
 
+    property string lang: "en"
+    readonly property var letterRows: S.letters(lang)
     readonly property var pages: [
-        [ "azertyuiop", "qsdfghjklm", "⇧wxcvbn'⌫", "⌨, .↵" ],
+        [ letterRows[0], letterRows[1], letterRows[2], "⌨, .↵" ],
         [ "1234567890", "@#$%&*-+()", "⇧!\"':;/?⌫", "⌨, .↵" ],
-        [ "~`|^_=[]{}", "éèêàçùôîï€", "⇧<>\\°£µ§⌫", "⌨, .↵" ]
+        [ "~`|^_=[]{}", S.accents(lang), "⇧<>\\°£µ§⌫", "⌨, .↵" ]
     ]
 
     function label(ch) {
-        if (ch === " ") return "espace"
+        if (ch === " ") return S.tr(lang, "space")
         if (ch === "↵") return enterLabel
         if (ch === "⌨") return page === 0 ? "?123" : "ABC"
         if (ch === "⇧") return page === 0 ? (capsLock ? "⇪" : "⇧") : (page === 1 ? "#+=" : "123")

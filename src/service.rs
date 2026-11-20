@@ -12,6 +12,7 @@ use zeroize::Zeroizing;
 
 use crate::config::{data_dir, Config, RELOCK_POLICIES};
 use crate::generator;
+use crate::i18n::{tr, tr1};
 use crate::vault::{quick_stat, Credentials, Vault};
 
 pub const OBJECT_PATH: &str = "/org/keepasskbd/Daemon";
@@ -109,7 +110,7 @@ impl Service {
         if self.allow_any_caller {
             return Ok(());
         }
-        let sender = hdr.sender().ok_or_else(|| fdo::Error::AccessDenied("expéditeur inconnu".into()))?;
+        let sender = hdr.sender().ok_or_else(|| fdo::Error::AccessDenied("unknown sender".into()))?;
         let dbus = fdo::DBusProxy::new(conn).await?;
         let pid = dbus.get_connection_unix_process_id(sender.clone().into()).await?;
         let (allowed, settings) = {
@@ -121,7 +122,7 @@ impl Service {
                 return Ok(());
             }
             eprintln!("appel refusé depuis {}", exe.display());
-            return Err(fdo::Error::AccessDenied(format!("appelant non autorisé : {}", exe.display())));
+            return Err(fdo::Error::AccessDenied(format!("caller not allowed: {}", exe.display())));
         }
         // L'application Paramètres tourne avec le groupe effectif « privileged » (binaire setgid) :
         // son exécutable n'est alors pas lisible. Un processus ordinaire ne peut pas obtenir ce
@@ -130,7 +131,7 @@ impl Service {
             return Ok(());
         }
         eprintln!("appel refusé depuis le processus {pid}");
-        Err(fdo::Error::AccessDenied("processus appelant non autorisé".into()))
+        Err(fdo::Error::AccessDenied("caller process not allowed".into()))
     }
 }
 
@@ -214,7 +215,7 @@ pub fn spawn_fidelity_check(shared: Shared) {
                 v.mark_fidelity_ok(snap.sha256);
             }
         }
-        Err(e) => log_error(&format!("test de fidélité : {e}")),
+        Err(e) => log_error(&format!("fidelity check: {e}")),
     });
 }
 
@@ -243,7 +244,7 @@ impl Service {
         };
         let keyfile = match keyfile {
             Some(p) => Some(Zeroizing::new(
-                std::fs::read(&p).map_err(|e| failed(format!("fichier clé {} : {e}", p.display())))?,
+                std::fs::read(&p).map_err(|e| failed(format!("key file {}: {e}", p.display())))?,
             )),
             None => None,
         };
@@ -277,7 +278,7 @@ impl Service {
         #[zbus(signal_emitter)] emitter: zbus::object_server::SignalEmitter<'_>,
     ) -> fdo::Result<bool> {
         self.check_caller(&hdr, conn, true).await?;
-        self.shared.lock().unwrap().lock("verrouillée");
+        self.shared.lock().unwrap().lock(&tr("locked"));
         let _ = Self::changed(&emitter).await;
         Ok(true)
     }
@@ -334,6 +335,37 @@ impl Service {
         Ok(true)
     }
 
+    /// Désinstallation complète, lancée hors de ce service (qui sera arrêté en cours de route).
+    async fn uninstall(
+        &self,
+        remove_settings: bool,
+        remove_backups: bool,
+        #[zbus(header)] hdr: Header<'_>,
+        #[zbus(connection)] conn: &zbus::Connection,
+    ) -> fdo::Result<String> {
+        self.check_caller(&hdr, conn, true).await?;
+        const SCRIPT: &str = "/usr/libexec/keepass-kbd/uninstall";
+        if !std::path::Path::new(SCRIPT).exists() {
+            return Ok(json!({"ok": false, "error": tr("uninstall script not found")}).to_string());
+        }
+        let mut cmd = std::process::Command::new("systemd-run");
+        cmd.args(["--user", "--collect", "--unit=keepass-kbd-uninstall", SCRIPT]);
+        if remove_settings {
+            cmd.arg("--remove-settings");
+        }
+        if remove_backups {
+            cmd.arg("--remove-backups");
+        }
+        match cmd.status() {
+            Ok(st) if st.success() => {
+                self.shared.lock().unwrap().lock(&tr("uninstalling"));
+                Ok(json!({"ok": true}).to_string())
+            }
+            Ok(st) => Ok(json!({"ok": false, "error": format!("systemd-run : {st}")}).to_string()),
+            Err(e) => Ok(json!({"ok": false, "error": format!("systemd-run : {e}")}).to_string()),
+        }
+    }
+
     async fn set_relock_policy(
         &self,
         policy: String,
@@ -342,7 +374,7 @@ impl Service {
     ) -> fdo::Result<bool> {
         self.check_caller(&hdr, conn, true).await?;
         if !RELOCK_POLICIES.iter().any(|(id, _)| *id == policy) {
-            return Err(failed(format!("politique inconnue : {policy}")));
+            return Err(failed(format!("unknown policy: {policy}")));
         }
         let mut g = self.shared.lock().unwrap();
         g.cfg.relock_policy = policy;
@@ -367,11 +399,11 @@ impl Service {
             .is_ok()
             && head == [0x03, 0xd9, 0xa2, 0x9a, 0x67, 0xfb, 0x4b, 0xb5];
         if !ok {
-            return Ok(json!({"ok": false, "error": "ce fichier n'est pas une base KeePass (.kdbx) lisible"}).to_string());
+            return Ok(json!({"ok": false, "error": tr("this file is not a readable KeePass (.kdbx) database")}).to_string());
         }
         {
             let mut g = self.shared.lock().unwrap();
-            g.lock("verrouillée (nouvelle base)");
+            g.lock(&tr("locked (new database)"));
             g.cfg.database = path;
             g.last_stat = None;
             let cfg_path = g.cfg_path.clone();
@@ -391,7 +423,7 @@ impl Service {
     ) -> fdo::Result<String> {
         self.check_caller(&hdr, conn, false).await?;
         let g = self.shared.lock().unwrap();
-        let v = g.vault.as_ref().ok_or_else(|| failed("base verrouillée"))?;
+        let v = g.vault.as_ref().ok_or_else(|| failed(tr("database locked")))?;
         let tokens: Vec<String> = fold(&query).split_whitespace().map(String::from).collect();
         let mut items: Vec<_> = v
             .summaries()
@@ -421,7 +453,7 @@ impl Service {
     ) -> fdo::Result<String> {
         self.check_caller(&hdr, conn, false).await?;
         let g = self.shared.lock().unwrap();
-        let v = g.vault.as_ref().ok_or_else(|| failed("base verrouillée"))?;
+        let v = g.vault.as_ref().ok_or_else(|| failed(tr("database locked")))?;
         let mut items = v.suggestions(&origin);
         items.sort_by(|(sa, a), (sb, b)| {
             let ua = g.usage.get(&a.id).copied().unwrap_or(0);
@@ -456,7 +488,7 @@ impl Service {
         let value = g
             .vault
             .as_ref()
-            .ok_or_else(|| failed("base verrouillée"))?
+            .ok_or_else(|| failed(tr("database locked")))?
             .field(&id, &field)
             .map_err(failed)?;
         g.usage.insert(id, now_secs());
@@ -493,16 +525,16 @@ impl Service {
         let snapshot = {
             let mut g = self.shared.lock().unwrap();
             if g.saving {
-                return Ok(json!({"ok": false, "error": "un enregistrement est déjà en cours"}).to_string());
+                return Ok(json!({"ok": false, "error": tr("a save is already in progress")}).to_string());
             }
-            let v = g.vault.as_mut().ok_or_else(|| failed("base verrouillée"))?;
+            let v = g.vault.as_mut().ok_or_else(|| failed(tr("database locked")))?;
             match v.snapshot() {
                 Ok(snap) => {
                     g.saving = true;
                     snap
                 }
                 Err(e) => {
-                    log_error(&format!("enregistrement refusé : {e}"));
+                    log_error(&format!("save refused: {e}"));
                     return Ok(json!({"ok": false, "error": e}).to_string());
                 }
             }
@@ -520,7 +552,7 @@ impl Service {
                 g.saving = false;
                 let r = match (prepared, g.vault.as_mut()) {
                     (Ok(p), Some(v)) => v.commit(&snapshot, p, &data_dir().join("backups"), keep),
-                    (Ok(_), None) => Err("la base a été verrouillée pendant l'enregistrement".into()),
+                    (Ok(_), None) => Err(tr("the database was locked during the save")),
                     (Err(e), _) => Err(e),
                 };
                 g.last_stat = quick_stat(&path);
@@ -533,11 +565,11 @@ impl Service {
             match result {
                 Ok(_) => {
                     emit_changed(&conn);
-                    notify_blocking(&conn, "Entrée KeePass enregistrée", &format!("« {title} » a été ajoutée à la base"));
+                    notify_blocking(&conn, &tr("KeePass entry saved"), &tr1("“%1” was added to the database", &title));
                 }
                 Err(e) => {
-                    log_error(&format!("enregistrement refusé : {e}"));
-                    notify_blocking(&conn, "Échec de l'enregistrement KeePass", &e);
+                    log_error(&format!("save refused: {e}"));
+                    notify_blocking(&conn, &tr("KeePass save failed"), &e);
                 }
             }
         });
@@ -569,7 +601,7 @@ pub fn spawn_watcher(shared: Shared, conn: zbus::blocking::Connection) {
                 _ => false,
             };
             if expired {
-                g.lock("mot de passe maître à ressaisir");
+                g.lock(&tr("master password required again"));
                 changed = true;
             } else {
                 let path = g.cfg.database.clone();
@@ -580,14 +612,14 @@ pub fn spawn_watcher(shared: Shared, conn: zbus::blocking::Connection) {
                     match r {
                         Ok(true) => {
                             reloaded = true;
-                            g.message = "base rechargée".into();
+                            g.message = tr("database reloaded");
                             eprintln!("base rechargée après modification du fichier");
                             changed = true;
                         }
                         Ok(false) => {}
                         Err(e) => {
                             eprintln!("rechargement impossible : {e}");
-                            g.lock(&format!("verrouillée : {e}"));
+                            g.lock(&tr1("locked: %1", &e));
                             changed = true;
                         }
                     }
@@ -618,13 +650,13 @@ pub fn spawn_screen_lock_listener(shared: Shared, conn: zbus::blocking::Connecti
                 let member = msg.header().member().map(|m| m.to_string()).unwrap_or_default();
                 let value: String = msg.body().deserialize().unwrap_or_default();
                 let reason = match (member.as_str(), value.as_str()) {
-                    ("display_status_ind", "off") => "verrouillée (mise en veille)",
-                    ("tklock_mode_ind", "locked") => "verrouillée avec l'écran",
+                    ("display_status_ind", "off") => "locked (sleep)",
+                    ("tklock_mode_ind", "locked") => "locked with the screen",
                     _ => continue,
                 };
                 let mut g = shared.lock().unwrap();
                 if g.cfg.lock_on_sleep() && g.vault.is_some() {
-                    g.lock(reason);
+                    g.lock(&tr(reason));
                     drop(g);
                     eprintln!("{reason}");
                     emit_changed(&conn);

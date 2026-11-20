@@ -1,18 +1,27 @@
-// Page Paramètres › Système › Clavier KeePass
+// Paramètres › Entrée de texte › Clavier KeePass
 import QtQuick 2.0
 import Sailfish.Silica 1.0
 import Sailfish.Pickers 1.0
 import Nemo.DBus 2.0
+import "KpxStrings.js" as S
 
 Page {
     id: page
 
     property var settings: ({})
-    property var policies: []
+    property var policies: ["restart", "24h", "1h", "30min", "5min", "wake"]
+    readonly property var policyLabels: ({
+        "restart": "on every restart", "24h": "every 24 hours", "1h": "every hour",
+        "30min": "every 30 minutes", "5min": "every 5 minutes", "wake": "on every wake-up"
+    })
     property string statusText: ""
     property bool loaded: false
+    property bool uninstalling: false
     // Remplacé à l'installation par la version de Cargo.toml.
     readonly property string uiVersion: "@VERSION@"
+
+    readonly property string lang: S.lang(Qt.locale().name)
+    function t(key, arg) { return S.tr(lang, key, arg) }
 
     function openGroups() { pageStack.push(groupPage) }
 
@@ -21,13 +30,12 @@ Page {
             var s = {}
             try { s = JSON.parse(json) } catch (e) {}
             page.settings = s
-            page.policies = s.policies || []
-            for (var i = 0; i < page.policies.length; ++i)
-                if (page.policies[i].id === s.relock_policy) policyBox.currentIndex = i
+            var i = page.policies.indexOf(s.relock_policy)
+            if (i >= 0) policyBox.currentIndex = i
             page.loaded = true
         }, function(err) {
             page.loaded = false
-            page.statusText = "Service keepass-kbd injoignable"
+            if (!page.uninstalling) page.statusText = page.t("keepass-kbd service unreachable")
         })
     }
 
@@ -45,6 +53,7 @@ Page {
 
     Component.onCompleted: reload()
 
+    // ── Choix du dossier des nouvelles entrées ────────────────────────
     Component {
         id: groupPage
         Page {
@@ -56,7 +65,7 @@ Page {
                 daemon.typedCall("SetNewEntryGroup", [{ "type": "s", "value": path }], function() {
                     page.reload()
                     pageStack.pop()
-                }, function() { page.statusText = "Réglage non enregistré" })
+                }, function() { page.statusText = page.t("Setting not saved") })
             }
 
             Component.onCompleted: daemon.typedCall("ListGroups", [], function(json) {
@@ -73,12 +82,11 @@ Page {
                 model: gp.groups || []
                 header: Column {
                     width: parent.width
-                    PageHeader { title: "Dossier des nouvelles entrées" }
+                    PageHeader { title: page.t("Folder for new entries") }
                     TextField {
-                        id: newGroup
                         width: parent.width
-                        label: "Nouveau dossier (ex. Internet/Applis)"
-                        placeholderText: "Nom d'un nouveau dossier"
+                        label: page.t("New folder (e.g. Internet/Apps)")
+                        placeholderText: page.t("Name of a new folder")
                         EnterKey.enabled: text.trim().length > 0
                         EnterKey.iconSource: "image://theme/icon-m-enter-accept"
                         EnterKey.onClicked: gp.choose(text)
@@ -89,17 +97,17 @@ Page {
                         width: parent.width - 2 * Theme.horizontalPageMargin
                         wrapMode: Text.Wrap
                         color: Theme.highlightColor
-                        text: "Déverrouillez la base depuis le clavier KeePass pour afficher ses dossiers."
+                        text: page.t("Unlock the database from the KeePass keyboard to show its folders.")
                         bottomPadding: Theme.paddingLarge
                     }
-                    SectionHeader { visible: gp.groups !== null; text: "Dossiers de la base" }
+                    SectionHeader { visible: gp.groups !== null; text: page.t("Database folders") }
                 }
                 delegate: ListItem {
                     contentHeight: Theme.itemSizeSmall
                     onClicked: gp.choose(modelData)
                     Icon {
                         id: folderIcon
-                        x: Theme.horizontalPageMargin + (modelData.split("/").length - 1) * Theme.paddingLarge * (modelData === "" ? 0 : 1)
+                        x: Theme.horizontalPageMargin + (modelData === "" ? 0 : (modelData.split("/").length - 1) * Theme.paddingLarge)
                         anchors.verticalCenter: parent.verticalCenter
                         source: modelData === "" ? "image://theme/icon-m-home" : "image://theme/icon-m-folder"
                         color: modelData === gp.current ? Theme.highlightColor : Theme.primaryColor
@@ -109,8 +117,8 @@ Page {
                                   rightMargin: Theme.horizontalPageMargin; verticalCenter: parent.verticalCenter }
                         truncationMode: TruncationMode.Fade
                         color: modelData === gp.current ? Theme.highlightColor : Theme.primaryColor
-                        text: modelData === "" ? "Racine de la base"
-                              : modelData.split("/").pop() + (modelData === "keepass-kbd" ? "  (par défaut)" : "")
+                        text: modelData === "" ? page.t("Database root")
+                              : modelData.split("/").pop() + (modelData === "keepass-kbd" ? page.t(" (default)") : "")
                     }
                 }
                 VerticalScrollDecorator {}
@@ -118,10 +126,11 @@ Page {
         }
     }
 
+    // ── Choix d'un autre fichier .kdbx ────────────────────────────────
     Component {
         id: kdbxPicker
         FilePickerPage {
-            title: "Choisir une base KeePass"
+            title: page.t("Choose a KeePass database")
             nameFilters: [ "*.kdbx" ]
             onSelectedContentPropertiesChanged: {
                 var filePath = selectedContentProperties.filePath
@@ -129,10 +138,62 @@ Page {
                 daemon.typedCall("SetDatabase", [{ "type": "s", "value": String(filePath) }], function(json) {
                     var r = {}
                     try { r = JSON.parse(json) } catch (e) {}
-                    page.statusText = r.ok ? "Nouvelle base enregistrée. Déverrouillez-la depuis le clavier."
-                                           : (r.error || "Impossible d'utiliser ce fichier")
+                    page.statusText = r.ok ? page.t("New database saved. Unlock it from the keyboard.")
+                                           : (r.error || page.t("Unable to use this file"))
                     page.reload()
-                }, function() { page.statusText = "Service keepass-kbd injoignable" })
+                }, function() { page.statusText = page.t("keepass-kbd service unreachable") })
+            }
+        }
+    }
+
+    // ── Confirmation de la désinstallation ────────────────────────────
+    Component {
+        id: uninstallDialog
+        Dialog {
+            id: dlg
+            canAccept: page.loaded
+            Column {
+                width: parent.width
+                spacing: Theme.paddingMedium
+                DialogHeader { acceptText: page.t("Uninstall") }
+                Label {
+                    x: Theme.horizontalPageMargin
+                    width: parent.width - 2 * Theme.horizontalPageMargin
+                    wrapMode: Text.Wrap
+                    font.pixelSize: Theme.fontSizeLarge
+                    color: Theme.highlightColor
+                    text: page.t("Uninstall KeePass Keyboard")
+                }
+                Label {
+                    x: Theme.horizontalPageMargin
+                    width: parent.width - 2 * Theme.horizontalPageMargin
+                    wrapMode: Text.Wrap
+                    color: Theme.secondaryHighlightColor
+                    text: page.t("Removes the keyboard layout, its settings pages and the background service. Your KeePass database is never modified.")
+                }
+                TextSwitch { id: removeSettings; text: page.t("Also delete settings") }
+                TextSwitch {
+                    id: removeBackups
+                    text: page.t("Also delete local backups")
+                    description: "~/.local/share/keepass-kbd/backups"
+                }
+            }
+            onAccepted: {
+                page.uninstalling = true
+                page.statusText = page.t("Uninstalling… The keyboard will restart.")
+                daemon.typedCall("Uninstall", [{ "type": "b", "value": removeSettings.checked },
+                                               { "type": "b", "value": removeBackups.checked }],
+                                 function(json) {
+                                     var r = {}
+                                     try { r = JSON.parse(json) } catch (e) {}
+                                     if (!r.ok) {
+                                         page.uninstalling = false
+                                         page.statusText = page.t("Uninstall failed") + (r.error ? " : " + r.error : "")
+                                     }
+                                 }, function() {
+                                     page.uninstalling = false
+                                     page.statusText = page.t("Uninstall failed")
+                                 })
             }
         }
     }
@@ -143,7 +204,7 @@ Page {
 
         PullDownMenu {
             MenuItem {
-                text: "Verrouiller maintenant"
+                text: page.t("Lock now")
                 enabled: page.settings.state === "unlocked"
                 onClicked: daemon.typedCall("Lock", [], function() { page.reload() })
             }
@@ -154,11 +215,10 @@ Page {
             width: parent.width
 
             PageHeader {
-                title: "Clavier KeePass"
-                description: page.settings.state === "unlocked"
-                             ? "Base déverrouillée · " + page.settings.entries + " entrées"
-                             : page.settings.state === "missing" ? "Base introuvable"
-                             : page.loaded ? "Base verrouillée" : ""
+                title: page.t("KeePass Keyboard")
+                description: page.settings.state === "unlocked" ? page.t("Database unlocked · %1 entries", page.settings.entries)
+                             : page.settings.state === "missing" ? page.t("Database not found")
+                             : page.loaded ? page.t("Database locked") : ""
             }
 
             Label {
@@ -171,38 +231,34 @@ Page {
                 bottomPadding: Theme.paddingMedium
             }
 
-            SectionHeader { text: "Sécurité" }
+            SectionHeader { text: page.t("Security") }
 
             ComboBox {
                 id: policyBox
-                enabled: page.loaded
-                label: "Redemander le mot de passe maître"
-                description: "Le téléphone reste protégé par son code et l'empreinte. "
-                             + "« À chaque sortie de veille » verrouille la base dès que l'écran s'éteint."
+                enabled: page.loaded && !page.uninstalling
+                label: page.t("Ask for the master password again")
+                description: page.t("The phone stays protected by its PIN and fingerprint. “On every wake-up” locks the database as soon as the screen turns off.")
                 menu: ContextMenu {
                     Repeater {
                         model: page.policies
-                        MenuItem { text: modelData.label }
+                        MenuItem { text: page.t(page.policyLabels[modelData]) }
                     }
                 }
                 onCurrentIndexChanged: {
-                    if (!page.loaded || currentIndex < 0 || currentIndex >= page.policies.length) return
-                    var id = page.policies[currentIndex].id
+                    if (!page.loaded || currentIndex < 0) return
+                    var id = page.policies[currentIndex]
                     if (id === page.settings.relock_policy) return
                     daemon.typedCall("SetRelockPolicy", [{ "type": "s", "value": id }],
                                      function() { page.statusText = ""; page.reload() },
-                                     function() { page.statusText = "Réglage non enregistré" })
+                                     function() { page.statusText = page.t("Setting not saved") })
                 }
             }
 
-            SectionHeader { text: "Base de données" }
+            SectionHeader { text: page.t("Database") }
 
             DetailItem {
-                label: "Fichier"
-                value: {
-                    var p = String(page.settings.database || "")
-                    return p.split("/").pop()
-                }
+                label: page.t("File")
+                value: String(page.settings.database || "").split("/").pop()
             }
             Label {
                 x: Theme.horizontalPageMargin
@@ -215,31 +271,30 @@ Page {
             Item { width: 1; height: Theme.paddingLarge }
             Button {
                 anchors.horizontalCenter: parent.horizontalCenter
-                text: "Choisir un autre fichier…"
-                enabled: page.loaded
+                text: page.t("Choose another file…")
+                enabled: page.loaded && !page.uninstalling
                 onClicked: pageStack.push(kdbxPicker)
             }
-
             Item { width: 1; height: Theme.paddingLarge }
             ValueButton {
-                label: "Dossier des nouvelles entrées"
-                value: page.settings.new_entry_group ? page.settings.new_entry_group : "Racine de la base"
-                description: "Créé automatiquement au premier enregistrement s'il n'existe pas"
-                enabled: page.loaded
+                label: page.t("Folder for new entries")
+                value: page.settings.new_entry_group ? page.settings.new_entry_group : page.t("Database root")
+                description: page.t("Created automatically on first save if it does not exist")
+                enabled: page.loaded && !page.uninstalling
                 onClicked: page.openGroups()
             }
 
-            SectionHeader { text: "À propos" }
+            SectionHeader { text: page.t("About") }
 
             DetailItem {
-                label: "Version"
+                label: page.t("Version")
                 value: page.uiVersion + (page.settings.version && page.settings.version !== page.uiVersion
-                                         ? "  (service " + page.settings.version + ")" : "")
+                                         ? "  " + page.t("(service %1)", page.settings.version) : "")
             }
-            DetailItem { label: "Auteur"; value: "Boris Solodki" }
-            DetailItem { label: "Contact"; value: "solboki@solodki.fr" }
+            DetailItem { label: page.t("Author"); value: "Boris Solodki" }
+            DetailItem { label: page.t("Contact"); value: "solboki@solodki.fr" }
 
-            SectionHeader { text: "Crédits" }
+            SectionHeader { text: page.t("Credits") }
 
             Label {
                 x: Theme.horizontalPageMargin
@@ -248,18 +303,28 @@ Page {
                 font.pixelSize: Theme.fontSizeExtraSmall
                 color: Theme.secondaryHighlightColor
                 textFormat: Text.PlainText
-                text: "Service (Rust) :\n"
-                      + "• keepass-rs — lecture et écriture des bases KDBX (MIT)\n"
-                      + "• zbus — communication D-Bus (MIT)\n"
-                      + "• rust-argon2, sha2, rand, zeroize — cryptographie (MIT / Apache-2.0)\n"
+                text: page.t("Background service (Rust):") + "\n"
+                      + "• " + page.t("keepass-rs — reading and writing KDBX databases (MIT)") + "\n"
+                      + "• " + page.t("zbus — D-Bus communication (MIT)") + "\n"
+                      + "• " + page.t("rust-argon2, sha2, rand, zeroize — cryptography (MIT / Apache-2.0)") + "\n"
                       + "• serde, serde_json, chrono, uuid (MIT / Apache-2.0)\n\n"
-                      + "Interface :\n"
-                      + "• Sailfish OS, Silica et Maliit — Jolla\n"
+                      + page.t("Interface:") + "\n"
+                      + "• " + page.t("Sailfish OS, Silica and Maliit — Jolla") + "\n"
                       + "• Qt 5 — The Qt Company (LGPL)\n"
-                      + "• FUTO Keyboard pour Sailfish — détection du site et de l'application en cours\n\n"
-                      + "Format KeePass : projet KeePass de Dominik Reichl ; compatible KeePassXC et KeePassDX."
+                      + "• " + page.t("FUTO Keyboard for Sailfish — detection of the current site and app") + "\n\n"
+                      + page.t("KeePass format: KeePass project by Dominik Reichl; compatible with KeePassXC and KeePassDX.")
                 bottomPadding: Theme.paddingLarge
             }
+
+            SectionHeader { text: page.t("Uninstall") }
+
+            Button {
+                anchors.horizontalCenter: parent.horizontalCenter
+                text: page.t("Uninstall KeePass Keyboard")
+                enabled: page.loaded && !page.uninstalling
+                onClicked: pageStack.push(uninstallDialog)
+            }
+            Item { width: 1; height: Theme.paddingLarge * 2 }
         }
         VerticalScrollDecorator {}
     }

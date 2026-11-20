@@ -6,6 +6,7 @@ import Sailfish.Silica 1.0
 import com.meego.maliitquick 1.0
 import Nemo.DBus 2.0
 import ".."
+import "KpxStrings.js" as S
 
 KeyboardLayout {
     id: root
@@ -37,6 +38,10 @@ KeyboardLayout {
     property string saveUrl: ""
     property string editing: ""              // "master", "query", "title", "user", "url"
 
+    // Langue du téléphone (anglais par défaut) et traduction des textes.
+    readonly property string lang: S.lang(Qt.locale().name)
+    function t(key, arg) { return S.tr(lang, key, arg) }
+
     readonly property int keyClick: typeof Maliit !== "undefined" ? Maliit.KeyClick : 0
     readonly property real unit: keyHeight > 0 ? keyHeight : Theme.itemSizeSmall
     readonly property bool passwordField: MInputMethodQuick.hiddenText
@@ -47,6 +52,8 @@ KeyboardLayout {
     function clearSecrets() {
         masterPassword = ""
         showMaster = false
+        showGenerated = false
+        masterCursor = -1; titleCursor = -1; userCursor = -1; urlCursor = -1
         generated = ""
         saveTitle = ""; saveUser = ""; saveUrl = ""
         autofill.stop()
@@ -164,12 +171,12 @@ KeyboardLayout {
         var items = []
         if (query === "" && suggestions.length > 0) {
             var ids = {}
-            items.push({ kind: "header", text: "Suggestions pour " + originLabel })
+            items.push({ kind: "header", text: t("Suggestions for %1", originLabel) })
             for (var i = 0; i < suggestions.length; ++i) {
                 items.push({ kind: "entry", entry: suggestions[i], suggested: true })
                 ids[suggestions[i].id] = true
             }
-            items.push({ kind: "header", text: "Toutes les entrées" })
+            items.push({ kind: "header", text: t("All entries") })
             for (var j = 0; j < entries.length; ++j)
                 if (!ids[entries[j].id]) items.push({ kind: "entry", entry: entries[j], suggested: false })
         } else {
@@ -190,7 +197,7 @@ KeyboardLayout {
     function unlock() {
         if (masterPassword.length === 0 || busyText !== "") return
         showMaster = false
-        busyText = "Déverrouillage…"
+        busyText = t("Unlocking…")
         var pw = masterPassword
         daemon.typedCall("Unlock", [{ "type": "s", "value": pw }], function(json) {
             busyText = ""
@@ -205,9 +212,9 @@ KeyboardLayout {
                 search()
             } else {
                 // La saisie est conservée : l'œil permet de la vérifier et de la corriger.
-                statusMessage = r.error || "échec du déverrouillage"
+                statusMessage = r.error || t("unlock failed")
             }
-        }, function(err) { busyText = ""; statusMessage = "service indisponible" })
+        }, function(err) { busyText = ""; statusMessage = t("service unavailable") })
         pw = ""
     }
 
@@ -246,10 +253,10 @@ KeyboardLayout {
             if (root.passwordField) {
                 stop()
                 root.insertField("password")
-                root.statusMessage = "identifiant et mot de passe insérés"
+                root.statusMessage = t("username and password inserted")
             } else if (++attempts > 10) {
                 stop()
-                root.statusMessage = "touchez le champ mot de passe puis la clé ci-dessous"
+                root.statusMessage = t("tap the password field, then the key below")
             }
         }
     }
@@ -263,7 +270,7 @@ KeyboardLayout {
         var classes = (genLower ? "l" : "") + (genUpper ? "u" : "") + (genDigits ? "d" : "") + (genSymbols ? "s" : "")
         daemon.typedCall("Generate", [{ "type": "u", "value": genLength }, { "type": "s", "value": classes }],
                          function(p) { generated = p; statusMessage = "" },
-                         function() { statusMessage = "choisissez au moins un type de caractères" })
+                         function() { statusMessage = t("select at least one character type") })
     }
 
     // Mot de passe généré avec chiffres et symboles colorés.
@@ -281,10 +288,10 @@ KeyboardLayout {
 
     function saveEntry() {
         if (generated.length === 0 || saveTitle.trim().length === 0) {
-            statusMessage = "le titre est obligatoire"
+            statusMessage = t("title is required")
             return
         }
-        busyText = "Enregistrement dans la base…"
+        busyText = t("Saving to the database…")
         daemon.typedCall("AddEntry", [
                              { "type": "s", "value": saveTitle.trim() },
                              { "type": "s", "value": saveUser },
@@ -303,25 +310,56 @@ KeyboardLayout {
                                  backToKeyboard()
                                  MInputMethodQuick.userHide()
                              } else {
-                                 statusMessage = r.error || "échec de l'enregistrement"
+                                 statusMessage = r.error || t("save failed")
                              }
-                         }, function() { busyText = ""; statusMessage = "service indisponible" })
+                         }, function() { busyText = ""; statusMessage = t("service unavailable") })
+    }
+
+    // ── Édition au curseur (mot de passe maître, titre, identifiant, URL) ──
+    // Position -1 = fin du texte.
+    property int masterCursor: -1
+    property int titleCursor: -1
+    property int userCursor: -1
+    property int urlCursor: -1
+    property bool showGenerated: false
+
+    function fieldValue(k) {
+        return k === "master" ? masterPassword : k === "title" ? saveTitle
+             : k === "user" ? saveUser : k === "url" ? saveUrl : ""
+    }
+    function setFieldValue(k, v) {
+        if (k === "master") masterPassword = v
+        else if (k === "title") saveTitle = v
+        else if (k === "user") saveUser = v
+        else if (k === "url") saveUrl = v
+    }
+    function cursorOf(k) {
+        var c = k === "master" ? masterCursor : k === "title" ? titleCursor
+              : k === "user" ? userCursor : k === "url" ? urlCursor : -1
+        var len = fieldValue(k).length
+        return c < 0 ? len : Math.min(c, len)
+    }
+    function setCursor(k, c) {
+        if (k === "master") masterCursor = c
+        else if (k === "title") titleCursor = c
+        else if (k === "user") userCursor = c
+        else if (k === "url") urlCursor = c
     }
 
     function editText(t) {
-        if (editing === "master") { masterPassword += t; statusMessage = "" }
-        else if (editing === "query") { query += t; search() }
-        else if (editing === "title") saveTitle += t
-        else if (editing === "user") saveUser += t
-        else if (editing === "url") saveUrl += t
+        if (editing === "query") { query += t; search(); return }
+        var v = fieldValue(editing), c = cursorOf(editing)
+        setFieldValue(editing, v.slice(0, c) + t + v.slice(c))
+        setCursor(editing, c + t.length)
+        if (editing === "master") statusMessage = ""
     }
 
     function editBackspace() {
-        if (editing === "master") masterPassword = masterPassword.slice(0, -1)
-        else if (editing === "query") { query = query.slice(0, -1); search() }
-        else if (editing === "title") saveTitle = saveTitle.slice(0, -1)
-        else if (editing === "user") saveUser = saveUser.slice(0, -1)
-        else if (editing === "url") saveUrl = saveUrl.slice(0, -1)
+        if (editing === "query") { query = query.slice(0, -1); search(); return }
+        var v = fieldValue(editing), c = cursorOf(editing)
+        if (c === 0) return
+        setFieldValue(editing, v.slice(0, c - 1) + v.slice(c))
+        setCursor(editing, c - 1)
     }
 
     function editAccept() {
@@ -333,8 +371,6 @@ KeyboardLayout {
     }
 
     function startEditing(key) {
-        // Toucher le champ déjà en cours d'édition referme le mini-clavier (bouton visible).
-        if (typing && editing === key) { typing = false; return }
         editing = key
         typing = true
         ensureFieldTimer.restart()
@@ -523,8 +559,8 @@ KeyboardLayout {
                         truncationMode: TruncationMode.Fade
                         font.pixelSize: Theme.fontSizeSmall
                         color: Theme.highlightColor
-                        text: root.mode === "generate" ? "Nouveau mot de passe"
-                              : root.mode === "save" ? "Enregistrer dans KeePass"
+                        text: root.mode === "generate" ? root.t("New password")
+                              : root.mode === "save" ? root.t("Save to KeePass")
                               : "KeePass"
                     }
                     Label {
@@ -535,11 +571,11 @@ KeyboardLayout {
                                                                                : Theme.secondaryColor
                         text: root.busyText !== "" ? root.busyText
                               : root.statusMessage !== "" ? root.statusMessage
-                              : root.mode === "locked" ? "Base verrouillée"
-                              : root.mode === "missing" ? "Base introuvable"
-                              : root.mode === "offline" ? "Service arrêté"
+                              : root.mode === "locked" ? root.t("Database locked")
+                              : root.mode === "missing" ? root.t("Database not found")
+                              : root.mode === "offline" ? root.t("Service stopped")
                               : root.origin !== "" ? root.originLabel
-                              : (root.entries.length + " entrées")
+                              : root.t("%1 entries", root.entries.length)
                     }
                 }
             }
@@ -586,63 +622,19 @@ KeyboardLayout {
                 width: parent.width
                 height: root.unit * 1.2
 
-                Item {
+                KpxLineField {
                     id: masterField
                     anchors { left: parent.left; right: okButton.left; rightMargin: Theme.paddingMedium
-                              leftMargin: Theme.paddingMedium; top: parent.top; bottom: parent.bottom }
-
-                    Item {
-                        id: masterTextArea
-                        anchors { left: parent.left; right: eye.left; bottom: underline.top
-                                  bottomMargin: Theme.paddingSmall }
-                        height: masterText.implicitHeight
-                        clip: true
-                        Text {
-                            id: masterText
-                            // Fin du texte toujours visible pendant la saisie.
-                            x: Math.min(0, parent.width - implicitWidth)
-                            font.family: Theme.fontFamily
-                            font.pixelSize: Theme.fontSizeMedium
-                            font.letterSpacing: root.showMaster ? 0 : 2
-                            textFormat: Text.PlainText
-                            color: Theme.primaryColor
-                            text: root.showMaster ? root.masterPassword
-                                                  : Array(root.masterPassword.length + 1).join("•")
-                        }
-                        Rectangle {
-                            // Curseur
-                            x: Math.min(masterText.implicitWidth, parent.width - width)
-                            width: 2; height: masterText.implicitHeight
-                            color: Theme.highlightColor
-                            SequentialAnimation on opacity {
-                                loops: Animation.Infinite
-                                running: root.mode === "locked"
-                                NumberAnimation { to: 0; duration: 500 }
-                                NumberAnimation { to: 1; duration: 500 }
-                            }
-                        }
-                    }
-                    IconButton {
-                        id: eye
-                        anchors { right: parent.right; verticalCenter: masterTextArea.verticalCenter }
-                        width: Theme.iconSizeMedium + Theme.paddingSmall; height: width
-                        icon.source: "image://theme/icon-splus-" + (root.showMaster ? "hide-password" : "show-password")
-                        onClicked: root.showMaster = !root.showMaster
-                    }
-                    Rectangle {
-                        id: underline
-                        anchors { left: parent.left; right: parent.right; bottom: masterLabel.top
-                                  bottomMargin: Theme.paddingSmall / 2 }
-                        height: Math.max(1, Theme.pixelRatio * 2)
-                        color: root.statusMessage !== "" ? Theme.errorColor : Theme.highlightColor
-                    }
-                    Label {
-                        id: masterLabel
-                        anchors { left: parent.left; bottom: parent.bottom }
-                        font.pixelSize: Theme.fontSizeTiny
-                        color: root.statusMessage !== "" ? Theme.errorColor : Theme.secondaryHighlightColor
-                        text: "Mot de passe maître"
-                    }
+                              leftMargin: Theme.paddingMedium; verticalCenter: parent.verticalCenter }
+                    label: root.t("Master password")
+                    value: root.masterPassword
+                    secret: true
+                    showSecret: root.showMaster
+                    editing: root.mode === "locked"
+                    error: root.statusMessage !== ""
+                    cursorPosition: root.cursorOf("master")
+                    onCursorRequested: { root.editing = "master"; root.masterCursor = position }
+                    onSecretToggled: root.showMaster = !root.showMaster
                 }
 
                 KpxButton {
@@ -682,7 +674,7 @@ KeyboardLayout {
                         truncationMode: TruncationMode.Fade
                         textFormat: Text.PlainText
                         color: root.query.length ? Theme.primaryColor : Theme.secondaryColor
-                        text: root.query.length ? root.query + (root.typing ? "▏" : "") : "Rechercher"
+                        text: root.query.length ? root.query + (root.typing ? "▏" : "") : root.t("Search")
                     }
                     MouseArea {
                         anchors.fill: parent
@@ -747,7 +739,7 @@ KeyboardLayout {
                                           verticalCenter: parent.verticalCenter }
                                 Label {
                                     width: parent.width
-                                    text: entryItem.entry ? (entryItem.entry.title || "(sans titre)") : ""
+                                    text: entryItem.entry ? (entryItem.entry.title || root.t("(untitled)")) : ""
                                     textFormat: Text.PlainText
                                     truncationMode: TruncationMode.Fade
                                     font.pixelSize: Theme.fontSizeSmall
@@ -776,7 +768,7 @@ KeyboardLayout {
                     Label {
                         visible: list.count === 0
                         anchors.centerIn: parent
-                        text: root.query.length ? "Aucun résultat" : "Base vide"
+                        text: root.query.length ? root.t("No results") : root.t("Empty database")
                         color: Theme.secondaryColor
                     }
                     VerticalScrollDecorator {}
@@ -799,7 +791,7 @@ KeyboardLayout {
                     KpxButton {
                         width: (parent.width - backspaceList.width - 2 * Theme.paddingSmall) / 2; height: parent.height
                         iconSource: "image://theme/icon-m-person"
-                        text: "Identifiant"
+                        text: root.t("Username")
                         active: root.selected !== null
                         highlighted: root.selected !== null && !root.passwordField
                         onClicked: root.insertField("username")
@@ -807,7 +799,7 @@ KeyboardLayout {
                     KpxButton {
                         width: (parent.width - backspaceList.width - 2 * Theme.paddingSmall) / 2; height: parent.height
                         iconSource: "image://theme/icon-m-keys"
-                        text: "Mot de passe"
+                        text: root.t("Password")
                         active: root.selected !== null
                         highlighted: root.selected !== null && root.passwordField
                         onClicked: root.insertField("password")
@@ -872,7 +864,7 @@ KeyboardLayout {
                         }
                         Label {
                             anchors { horizontalCenter: parent.horizontalCenter; top: parent.top }
-                            text: root.genLength + " caractères"
+                            text: root.t("%1 characters", root.genLength)
                             font.pixelSize: Theme.fontSizeExtraSmall
                             color: Theme.highlightColor
                         }
@@ -909,7 +901,7 @@ KeyboardLayout {
                     KpxButton {
                         width: parent.width - backspaceGen.width - Theme.paddingSmall; height: parent.height
                         iconSource: "image://theme/icon-m-acknowledge"
-                        text: "Utiliser"
+                        text: root.t("Use")
                         highlighted: true
                         active: root.generated.length > 0
                         onClicked: {
@@ -947,27 +939,33 @@ KeyboardLayout {
                     KpxLineField {
                         id: titleField
                         width: parent.width
-                        label: "Titre"
-                        placeholder: "Titre de l'entrée"
+                        label: root.t("Title")
+                        placeholder: root.t("Entry title")
                         value: root.saveTitle
                         editing: root.typing && root.editing === "title"
+                        cursorPosition: root.cursorOf("title")
+                        onCursorRequested: root.titleCursor = position
                         onClicked: root.startEditing("title")
                     }
                     KpxLineField {
                         id: userField
                         width: parent.width
-                        label: "Identifiant"
-                        placeholder: "Identifiant ou e-mail"
+                        label: root.t("Username")
+                        placeholder: root.t("Username or e-mail")
                         value: root.saveUser
                         editing: root.typing && root.editing === "user"
+                        cursorPosition: root.cursorOf("user")
+                        onCursorRequested: root.userCursor = position
                         onClicked: root.startEditing("user")
                     }
                     KpxLineField {
                         width: parent.width
-                        label: "Mot de passe"
+                        label: root.t("Password")
                         value: root.generated
                         secret: true
+                        showSecret: root.showGenerated
                         readOnly: true
+                        onSecretToggled: root.showGenerated = !root.showGenerated
                     }
                     KpxLineField {
                         id: urlField
@@ -976,6 +974,8 @@ KeyboardLayout {
                         placeholder: "https://… ou app://…"
                         value: root.saveUrl
                         editing: root.typing && root.editing === "url"
+                        cursorPosition: root.cursorOf("url")
+                        onCursorRequested: root.urlCursor = position
                         onClicked: root.startEditing("url")
                     }
                     Item { width: 1; height: Theme.paddingSmall }
@@ -983,7 +983,7 @@ KeyboardLayout {
                         width: parent.width
                         height: root.unit * 0.9
                         iconSource: "image://theme/icon-m-acknowledge"
-                        text: "Enregistrer dans KeePass"
+                        text: root.t("Save to KeePass")
                         highlighted: true
                         active: root.saveTitle.trim().length > 0 && root.busyText === ""
                         onClicked: root.saveEntry()
@@ -1009,8 +1009,8 @@ KeyboardLayout {
                     horizontalAlignment: Text.AlignHCenter
                     color: Theme.secondaryColor
                     text: root.mode === "missing"
-                          ? "Le fichier .kdbx est introuvable. Vérifiez le montage Nextcloud et ~/.config/keepass-kbd/config.json."
-                          : "Démarrez le service : systemctl --user start keepass-kbd"
+                          ? root.t("The .kdbx file was not found. Check its location in the KeePass Keyboard settings.")
+                          : root.t("Start the service: systemctl --user start keepass-kbd")
                 }
             }
 
@@ -1021,9 +1021,10 @@ KeyboardLayout {
                 anchors.bottomMargin: Theme.paddingSmall
                 width: parent.width
                 rowHeight: root.unit * 0.8
-                enterLabel: root.mode === "locked" ? "OK"
-                            : root.mode === "save" ? (root.editing === "url" ? "Enreg." : "Suivant")
-                            : "Fermer"
+                enterLabel: root.mode === "locked" ? root.t("OK")
+                            : root.mode === "save" ? (root.editing === "url" ? root.t("Save") : root.t("Next"))
+                            : root.t("Close")
+                lang: root.lang
                 onTyped: root.editText(text)
                 onBackspace: root.editBackspace()
                 onAccepted: root.editAccept()

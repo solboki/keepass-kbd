@@ -1,5 +1,6 @@
 mod config;
 mod generator;
+mod i18n;
 mod service;
 mod titles;
 mod vault;

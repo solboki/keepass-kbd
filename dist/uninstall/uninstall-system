@@ -1,0 +1,17 @@
+#!/bin/sh
+# Clavier KeePass — retrait des fichiers système (root, via pkexec ou devel-su).
+# --check : vérifie seulement l'accès (aucune suppression).
+if [ "$1" = "--check" ]; then echo "accès root : $(id -u)"; exit 0; fi
+LAYOUTS=/usr/share/maliit/plugins/com/jolla/layouts
+rm -f "$LAYOUTS/keepass.qml" "$LAYOUTS/KpxButton.qml" "$LAYOUTS/KpxMiniKeyboard.qml" \
+      "$LAYOUTS/KpxBackspaceButton.qml" "$LAYOUTS/KpxLineField.qml" "$LAYOUTS/KpxStrings.js" \
+      "$LAYOUTS/layouts_keepass.conf"
+rm -f /usr/share/maliit/plugins/com/jolla/handlers/KeepassInputHandler.qml
+rm -rf /usr/share/jolla-settings/pages/keepass-kbd
+rm -f /usr/share/jolla-settings/entries/keepass-kbd.json
+rm -f /usr/share/translations/settings-keepass-kbd*.qm
+rm -rf /usr/share/keepass-kbd
+rm -f /usr/share/icons/hicolor/86x86/apps/keepass-kbd.png
+rm -f /usr/share/polkit-1/actions/org.keepasskbd.policy /usr/share/polkit-1/rules.d/49-keepass-kbd.rules
+rm -rf /usr/libexec/keepass-kbd
+echo "Fichiers système du Clavier KeePass retirés"
