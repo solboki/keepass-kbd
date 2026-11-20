@@ -157,6 +157,28 @@ fn privileged_settings_process(pid: u32, settings: &[PathBuf]) -> bool {
     settings.iter().any(|a| a == argv0)
 }
 
+/// Notification système (bandeau en haut de l'écran sous Sailfish).
+async fn notify(conn: &zbus::Connection, summary: &str, body: &str) {
+    use std::collections::HashMap;
+    use zbus::zvariant::Value;
+    let mut hints: HashMap<&str, Value<'_>> = HashMap::new();
+    hints.insert("x-nemo-preview-summary", Value::from(summary));
+    hints.insert("x-nemo-preview-body", Value::from(body));
+    hints.insert("urgency", Value::U8(1));
+    let r = conn
+        .call_method(
+            Some("org.freedesktop.Notifications"),
+            "/org/freedesktop/Notifications",
+            Some("org.freedesktop.Notifications"),
+            "Notify",
+            &("Clavier KeePass", 0u32, "icon-lock-information", summary, body, Vec::<&str>::new(), hints, 5000i32),
+        )
+        .await;
+    if let Err(e) = r {
+        eprintln!("notification impossible : {e}");
+    }
+}
+
 fn failed(e: impl Into<String>) -> fdo::Error {
     fdo::Error::Failed(e.into())
 }
@@ -341,6 +363,17 @@ impl Service {
         Ok(serde_json::to_string(&list).unwrap())
     }
 
+    /// Titre proposé pour une nouvelle entrée (nom de l'application ou du site).
+    async fn suggest_title(
+        &self,
+        origin: String,
+        #[zbus(header)] hdr: Header<'_>,
+        #[zbus(connection)] conn: &zbus::Connection,
+    ) -> fdo::Result<String> {
+        self.check_caller(&hdr, conn, false).await?;
+        Ok(crate::titles::suggest_title(&origin))
+    }
+
     /// Valeur d'un champ (username, password, url, title, notes) d'une entrée.
     async fn get_field(
         &self,
@@ -405,6 +438,9 @@ impl Service {
         };
         if reply.contains("\"ok\":true") {
             let _ = Self::changed(&emitter).await;
+            notify(conn, "Entrée KeePass enregistrée", &format!("« {} » a été ajoutée à la base", title)).await;
+        } else {
+            notify(conn, "Échec de l'enregistrement KeePass", "L'entrée n'a pas été ajoutée. Ouvrez le clavier KeePass pour le détail.").await;
         }
         Ok(reply)
     }

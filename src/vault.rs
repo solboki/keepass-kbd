@@ -374,7 +374,7 @@ fn summary_of(e: &keepass::db::EntryRef<'_>) -> EntrySummary {
 }
 
 /// Hôte d'une URL en minuscules (sans schéma, port, chemin ni « www. »). Accepte une URL sans schéma.
-fn host_of(url: &str) -> Option<String> {
+pub fn host_of(url: &str) -> Option<String> {
     let url = url.trim().to_lowercase();
     if url.is_empty() || url.starts_with("app://") || url.starts_with("androidapp://") {
         return None;
@@ -388,7 +388,7 @@ fn host_of(url: &str) -> Option<String> {
 }
 
 /// Domaine « enregistrable » approché : deux derniers labels, trois pour co.uk, com.fr, etc.
-fn registrable(host: &str) -> String {
+pub fn registrable(host: &str) -> String {
     let labels: Vec<&str> = host.split('.').collect();
     let n = labels.len();
     if n <= 2 {

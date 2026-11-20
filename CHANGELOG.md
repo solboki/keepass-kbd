@@ -6,6 +6,16 @@ Incrémenter avec `scripts/bump-version.sh patch|minor|major`.
 
 ## [Non publié]
 
+## [0.8.0] - 2026-11-20
+### Ajouté
+- Création d'entrée : titre proposé (nom de l'application lu dans son .desktop, ou nom du site)
+  et identifiant repris de la page (mémorisé par FUTO, sinon suivi de secours en mémoire vive).
+- Notification système en haut de l'écran après l'enregistrement (ou en cas d'échec).
+- `KEEPASS_KBD_DATA_DIR` pour isoler les données des tests.
+### Modifié
+- Formulaire d'enregistrement au style Sailfish : titre, identifiant, mot de passe masqué (œil), URL,
+  puis bouton d'enregistrement, l'un sous l'autre.
+
 ## [0.7.1] - 2026-11-20
 ### Corrigé
 - Entrée « Clavier KeePass » absente de Paramètres › Entrée de texte : la clé `settings=` n'est lue

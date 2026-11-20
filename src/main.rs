@@ -1,6 +1,7 @@
 mod config;
 mod generator;
 mod service;
+mod titles;
 mod vault;
 
 use std::io::{BufRead, Write};

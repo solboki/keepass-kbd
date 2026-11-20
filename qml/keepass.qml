@@ -325,9 +325,67 @@ KeyboardLayout {
     function editAccept() {
         if (editing === "master") unlock()
         else if (editing === "query") typing = false
-        else if (editing === "title") editing = "user"
-        else if (editing === "user") editing = "url"
-        else if (editing === "url") saveEntry()
+        else if (editing === "title") startEditing("user")
+        else if (editing === "user") startEditing("url")
+        else if (editing === "url") { typing = false; saveEntry() }
+    }
+
+    function startEditing(key) {
+        // Toucher le champ déjà en cours d'édition referme le mini-clavier (bouton visible).
+        if (typing && editing === key) { typing = false; return }
+        editing = key
+        typing = true
+        ensureFieldTimer.restart()
+    }
+    Timer {
+        id: ensureFieldTimer
+        interval: 50
+        onTriggered: saveForm.ensureVisible(root.editing === "title" ? titleField
+                                            : root.editing === "user" ? userField : urlField)
+    }
+
+    // ── Préremplissage du formulaire d'enregistrement ─────────────────
+    // Identifiant tapé sur la page : mémorisé par FUTO (lastCredentialUsername),
+    // sinon par le suivi de secours ci-dessous. Uniquement en mémoire vive.
+    property string trackedUsername: ""
+
+    function originKey(o) {
+        o = String(o || "").trim().toLowerCase()
+        if (o.indexOf("app://") === 0) return o.replace(/\/+$/, "")
+        return o.replace(/^[a-z]+:\/\//, "").replace(/^www\./, "").split(/[\/?#:]/)[0]
+    }
+
+    function sameSite(a, b) {
+        var ka = originKey(a), kb = originKey(b)
+        if (ka === "" || kb === "") return true
+        if (ka === kb) return true
+        // Sous-domaines d'un même site (compte.laposte.fr / laposte.fr)
+        return ka.length > kb.length ? ka.slice(-kb.length - 1) === "." + kb : kb.slice(-ka.length - 1) === "." + ka
+    }
+
+    function pageUsername() {
+        var handlers = canvas.layoutModel ? canvas.layoutModel.inputHandlers : null
+        var futoHandler = handlers ? handlers["FutoInputHandler.qml"] : null
+        if (futoHandler && futoHandler.lastCredentialUsername
+                && sameSite(futoHandler.lastCredentialUsernameOrigin, origin))
+            return String(futoHandler.lastCredentialUsername)
+        return trackedUsername
+    }
+
+    function openSaveForm() {
+        statusMessage = ""
+        mode = "save"
+        if (saveUrl === "" && origin !== "") saveUrl = origin
+        if (saveUser === "") saveUser = pageUsername()
+        typing = false; editing = ""
+        if (saveTitle === "" && origin !== "") {
+            daemon.typedCall("SuggestTitle", [{ "type": "s", "value": origin }], function(t) {
+                if (root.saveTitle === "") root.saveTitle = String(t || "")
+                if (root.saveTitle === "") root.startEditing("title")
+            }, function() { root.startEditing("title") })
+        } else if (saveTitle === "") {
+            startEditing("title")
+        }
     }
 
     // Couleur d'avatar stable dérivée du titre.
@@ -384,6 +442,12 @@ KeyboardLayout {
     }
     Connections {
         target: MInputMethodQuick
+        onSurroundingTextChanged: {
+            if (root.passwordField || canvas.activeIndex === root.layoutIndex) return
+            var t = String(MInputMethodQuick.surroundingText || "").trim()
+            if (t.length >= 3 && t.length <= 120 && !/\s/.test(t) && !/^[a-z]+:\/\//i.test(t))
+                root.trackedUsername = t
+        }
         onActiveChanged: {
             if (!MInputMethodQuick.active) {
                 hideTimer.restart()
@@ -402,6 +466,7 @@ KeyboardLayout {
         onTriggered: {
             if (MInputMethodQuick.active) return
             root.clearSecrets()
+            root.trackedUsername = ""
             root.typing = false
             if (canvas.activeIndex === root.layoutIndex) root.backToKeyboard()
         }
@@ -850,70 +915,81 @@ KeyboardLayout {
                         text: "Enregistrer…"
                         highlighted: true
                         active: root.generated.length > 0
-                        onClicked: {
-                            root.mode = "save"; root.editing = "title"; root.typing = true; root.statusMessage = ""
-                            if (root.saveUrl === "" && root.origin !== "") root.saveUrl = root.origin
-                        }
+                        onClicked: root.openSaveForm()
                     }
                 }
             }
 
             // ── Enregistrement d'une nouvelle entrée ──────────────────
-            Column {
+            SilicaFlickable {
+                id: saveForm
                 visible: root.mode === "save"
-                width: parent.width
-                spacing: Theme.paddingSmall
-                Row {
+                anchors { top: parent.top; left: parent.left; right: parent.right
+                          bottom: root.typing ? miniKeyboard.top : parent.bottom
+                          leftMargin: Theme.paddingMedium; rightMargin: Theme.paddingMedium
+                          bottomMargin: Theme.paddingSmall }
+                clip: true
+                contentHeight: saveColumn.height
+                boundsBehavior: Flickable.StopAtBounds
+
+                function ensureVisible(item) {
+                    if (!item) return
+                    if (item.y < contentY) contentY = item.y
+                    else if (item.y + item.height > contentY + height)
+                        contentY = Math.min(item.y + item.height - height, Math.max(0, contentHeight - height))
+                }
+
+                Column {
+                    id: saveColumn
                     width: parent.width
-                    height: root.unit * 0.7
                     spacing: Theme.paddingSmall
-                    property real w: (width - 3 * Theme.paddingSmall) / 4
-                    Repeater {
-                        model: [ { key: "title", label: "Titre" }, { key: "user", label: "Identifiant" },
-                                 { key: "url", label: "URL" } ]
-                        KpxButton {
-                            width: parent.w; height: parent.height
-                            text: modelData.label
-                            highlighted: root.editing === modelData.key
-                            onClicked: { root.editing = modelData.key; root.typing = true }
-                        }
+
+                    KpxLineField {
+                        id: titleField
+                        width: parent.width
+                        label: "Titre"
+                        placeholder: "Titre de l'entrée"
+                        value: root.saveTitle
+                        editing: root.typing && root.editing === "title"
+                        onClicked: root.startEditing("title")
                     }
+                    KpxLineField {
+                        id: userField
+                        width: parent.width
+                        label: "Identifiant"
+                        placeholder: "Identifiant ou e-mail"
+                        value: root.saveUser
+                        editing: root.typing && root.editing === "user"
+                        onClicked: root.startEditing("user")
+                    }
+                    KpxLineField {
+                        width: parent.width
+                        label: "Mot de passe"
+                        value: root.generated
+                        secret: true
+                        readOnly: true
+                    }
+                    KpxLineField {
+                        id: urlField
+                        width: parent.width
+                        label: "URL"
+                        placeholder: "https://… ou app://…"
+                        value: root.saveUrl
+                        editing: root.typing && root.editing === "url"
+                        onClicked: root.startEditing("url")
+                    }
+                    Item { width: 1; height: Theme.paddingSmall }
                     KpxButton {
-                        width: parent.w; height: parent.height
+                        width: parent.width
+                        height: root.unit * 0.9
                         iconSource: "image://theme/icon-m-acknowledge"
+                        text: "Enregistrer dans KeePass"
                         highlighted: true
                         active: root.saveTitle.trim().length > 0 && root.busyText === ""
                         onClicked: root.saveEntry()
                     }
                 }
-                Rectangle {
-                    width: parent.width
-                    height: root.unit * 0.75
-                    radius: Theme.paddingMedium
-                    color: Theme.rgba(Theme.highlightBackgroundColor, 0.15)
-                    border.width: 1
-                    border.color: Theme.rgba(Theme.highlightColor, 0.5)
-                    readonly property string value: root.editing === "title" ? root.saveTitle
-                                                   : root.editing === "user" ? root.saveUser : root.saveUrl
-                    readonly property string hint: root.editing === "title" ? "Titre de l'entrée (obligatoire)"
-                                                  : root.editing === "user" ? "Identifiant ou e-mail"
-                                                  : "URL ou app://identifiant-de-l-appli"
-                    Item {
-                        id: saveFieldArea
-                        anchors { fill: parent; leftMargin: Theme.paddingLarge; rightMargin: Theme.paddingLarge }
-                        clip: true
-                        Text {
-                            x: Math.min(0, parent.width - implicitWidth)
-                            anchors.verticalCenter: parent.verticalCenter
-                            font.family: Theme.fontFamily
-                            font.pixelSize: Theme.fontSizeMedium
-                            textFormat: Text.PlainText
-                            color: saveFieldArea.parent.value.length ? Theme.primaryColor : Theme.secondaryColor
-                            text: saveFieldArea.parent.value.length ? saveFieldArea.parent.value + "▏"
-                                                                    : saveFieldArea.parent.hint
-                        }
-                    }
-                }
+                VerticalScrollDecorator {}
             }
 
             // ── Base introuvable / service arrêté ─────────────────────
@@ -945,7 +1021,9 @@ KeyboardLayout {
                 anchors.bottomMargin: Theme.paddingSmall
                 width: parent.width
                 rowHeight: root.unit * 0.8
-                enterLabel: root.mode === "locked" ? "OK" : root.mode === "save" ? "Suivant" : "Fermer"
+                enterLabel: root.mode === "locked" ? "OK"
+                            : root.mode === "save" ? (root.editing === "url" ? "Enreg." : "Suivant")
+                            : "Fermer"
                 onTyped: root.editText(text)
                 onBackspace: root.editBackspace()
                 onAccepted: root.editAccept()

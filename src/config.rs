@@ -95,6 +95,9 @@ pub fn default_config_path() -> PathBuf {
     home().join(".config/keepass-kbd/config.json")
 }
 
+/// Dossier des données (sauvegardes, usage). `KEEPASS_KBD_DATA_DIR` le remplace pour les tests.
 pub fn data_dir() -> PathBuf {
-    home().join(".local/share/keepass-kbd")
+    std::env::var_os("KEEPASS_KBD_DATA_DIR")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| home().join(".local/share/keepass-kbd"))
 }
