@@ -1,4 +1,4 @@
-/* Entrée affichée dans Paramètres › Saisie de texte quand la disposition KeePass est active. */
+/* Entrée affichée dans Paramètres › Entrée de texte quand la disposition KeePass est active. */
 import QtQuick 2.0
 import Sailfish.Silica 1.0
 
