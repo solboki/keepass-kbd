@@ -5,7 +5,7 @@ description = "KeePass password keyboard for Sailfish OS: fill, generate and sav
 license = "GPL-3.0-or-later"
 repository = "https://github.com/solboki/keepass-kbd"
 readme = "README.md"
-version = "1.1.0"
+version = "1.1.1"
 edition = "2024"
 
 [dependencies]

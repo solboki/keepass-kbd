@@ -228,34 +228,42 @@ impl Vault {
     }
 
     /// Entrée de cette base (base des codes) correspondant à une entrée de la base des mots de
-    /// passe : lien posé par le clavier (champ `KeePassKbd-Link`), sinon même site (URL) et même
-    /// identifiant, sinon même titre et même identifiant. `with_totp` : seulement les entrées
-    /// qui ont un code.
+    /// passe : lien posé par le clavier (champ `KeePassKbd-Link`), sinon même site (URL, titre
+    /// ou émetteur du lien otpauth, croisés) et même compte (identifiant, ou compte du lien
+    /// otpauth ; absent d'un côté = accepté). `with_totp` : seulement les entrées qui ont un code.
     pub fn counterpart(&self, src: &EntrySummary, with_totp: bool) -> Option<String> {
         let has = |e: &keepass::db::EntryRef<'_>| !with_totp || crate::totp::Spec::from_fields(|k| e.get(k)).is_some();
-        let same_user = |e: &keepass::db::EntryRef<'_>| {
-            let u = e.get_username().unwrap_or("").trim();
-            u.is_empty() || src.username.trim().is_empty() || u.eq_ignore_ascii_case(src.username.trim())
-        };
         let candidates: Vec<_> = self.live_entries().filter(|e| has(e)).collect();
         if let Some(e) = candidates.iter().find(|e| e.get(LINK_FIELD).map(str::trim) == Some(src.id.as_str())) {
             return Some(e.id().to_string());
         }
-        if let Some(host) = host_of(&src.url) {
-            let domain = registrable(&host);
-            if let Some(e) = candidates.iter().find(|e| {
-                host_of(e.get_url().unwrap_or("")).is_some_and(|h| registrable(&h) == domain) && same_user(e)
-            }) {
-                return Some(e.id().to_string());
-            }
-        }
-        let title = src.title.trim().to_lowercase();
-        if title.is_empty() {
+        let src_keys = site_keys([src.url.as_str(), src.title.as_str()]);
+        if src_keys.is_empty() {
             return None;
         }
-        candidates
+        let described = |e: &keepass::db::EntryRef<'_>| e.get("otp").and_then(crate::totp::describe);
+        let matching: Vec<_> = candidates
             .iter()
-            .find(|e| e.get_title().unwrap_or("").trim().to_lowercase() == title && same_user(e))
+            .filter(|e| {
+                let d = described(e);
+                let issuer = d.as_ref().map(|d| d.issuer.clone()).unwrap_or_default();
+                let keys = site_keys([e.get_url().unwrap_or(""), e.get_title().unwrap_or(""), issuer.as_str()]);
+                keys.iter().any(|k| src_keys.contains(k))
+            })
+            .collect();
+        // Même identifiant d'abord, puis identifiant absent d'un côté ; jamais un autre compte.
+        let user_of = |e: &keepass::db::EntryRef<'_>| {
+            let u = e.get_username().unwrap_or("").trim().to_string();
+            if !u.is_empty() {
+                return u;
+            }
+            described(e).map(|d| d.account).unwrap_or_default()
+        };
+        let src_user = src.username.trim();
+        matching
+            .iter()
+            .find(|e| same_account(&user_of(e), src_user) == Some(true))
+            .or_else(|| matching.iter().find(|e| same_account(&user_of(e), src_user).is_none()))
             .map(|e| e.id().to_string())
     }
 
@@ -363,6 +371,40 @@ fn summary_of(e: &keepass::db::EntryRef<'_>) -> EntrySummary {
         totp_period,
     }
 }
+
+/// Clés de site d'une entrée, à partir de son URL, de son titre ou de l'émetteur d'un code :
+/// nom du domaine sans extension (« facebook » pour https://m.facebook.com) et texte réduit aux
+/// lettres et chiffres (« facebook » pour « Facebook », « comptegh » pour « Compte GH »).
+fn site_keys<'a>(texts: impl IntoIterator<Item = &'a str>) -> Vec<String> {
+    let mut keys = Vec::new();
+    for t in texts {
+        let t = t.trim();
+        if t.is_empty() {
+            continue;
+        }
+        if let Some(host) = host_of(t) {
+            let domain = registrable(&host);
+            keys.push(domain.split('.').next().unwrap_or("").to_string());
+        }
+        keys.push(t.to_lowercase().chars().filter(|c| c.is_alphanumeric()).collect());
+    }
+    keys.retain(|k| k.chars().count() >= 2);
+    keys.sort();
+    keys.dedup();
+    keys
+}
+
+/// Même compte ? Some(true) : identique (casse ignorée ; « boris@x.fr » et « boris » aussi),
+/// Some(false) : autre compte, None : identifiant absent d'un côté.
+fn same_account(a: &str, b: &str) -> Option<bool> {
+    let (a, b) = (a.trim().to_lowercase(), b.trim().to_lowercase());
+    if a.is_empty() || b.is_empty() {
+        return None;
+    }
+    let local = |s: &str| s.split('@').next().unwrap_or("").to_string();
+    Some(a == b || (!a.contains('@') && local(&b) == a) || (!b.contains('@') && local(&a) == b))
+}
+
 
 /// Hôte d'une URL en minuscules (sans schéma, port, chemin ni « www. »). Accepte une URL sans schéma.
 pub fn host_of(url: &str) -> Option<String> {
@@ -755,6 +797,20 @@ mod tests {
         assert_eq!(v.counterpart(&other_user, true), None);
         let other_site = summary("55555555-5555-5555-5555-555555555555", "Banque", "boris", "https://banque.example");
         assert_eq!(v.counterpart(&other_site, true), None);
+        // Entrée créée ailleurs : titre seul, pas d'URL ; compte lu dans le lien otpauth.
+        let snap = v.snapshot().unwrap();
+        let fb_src = summary("66666666-6666-6666-6666-666666666666", "Facebook", "", "");
+        let p = prepare_add_otp_entry(&snap, "", &fb_src, "otpauth://totp/Facebook:boris%40mail.fr?secret=JBSWY3DPEHPK3PXP&issuer=Facebook").unwrap();
+        let fb_id = p.id.clone();
+        v.commit(&snap, p, &dir.join("backups"), 3).unwrap();
+        // Retirer le lien : on simule une entrée importée d'une autre application.
+        v.db.entry_mut(EntryId::from(uuid::Uuid::parse_str(&fb_id).unwrap())).unwrap().set_unprotected(LINK_FIELD, "");
+        let fb = summary("77777777-7777-7777-7777-777777777777", "facebook.com", "boris@mail.fr", "https://www.facebook.com/login");
+        assert_eq!(v.counterpart(&fb, true), Some(fb_id.clone()));
+        let fb_short = summary("88888888-8888-8888-8888-888888888888", "FB", "boris", "https://m.facebook.com");
+        assert_eq!(v.counterpart(&fb_short, true), Some(fb_id.clone()));
+        let fb_other = summary("99999999-9999-9999-9999-999999999999", "Facebook", "alice@mail.fr", "https://facebook.com");
+        assert_eq!(v.counterpart(&fb_other, true), None);
         std::fs::remove_dir_all(&dir).unwrap();
     }
 

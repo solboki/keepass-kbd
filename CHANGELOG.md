@@ -6,6 +6,13 @@ after listing the changes under “Unreleased”.
 
 ## [Unreleased]
 
+## [1.1.1] - 2026-11-21
+### Fixed
+- Codes of a separate one-time codes database were not found for entries created elsewhere (other
+  app, KeePassXC import): the site is now matched across URL, title and the issuer of the `otpauth`
+  link (`facebook.com` ↔ “Facebook”), and the account also from the `otpauth` link (`boris@mail.fr` ↔
+  `boris`; missing on one side = accepted). A different account of the same site is still never used.
+
 ## [1.1.0] - 2026-11-20
 ### Added
 - One-time codes (TOTP), off by default: enable *One-time codes (TOTP)* in the settings and a *Code (N s)*
