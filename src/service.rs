@@ -369,6 +369,18 @@ fn failed(e: impl Into<String>) -> fdo::Error {
 
 #[interface(name = "org.keepasskbd.Daemon1")]
 impl Service {
+    /// Origine (`https://hôte`) de la page ouverte dans le navigateur natif (dernière page visitée
+    /// dans un onglet ouvert, voir `browser.rs`) ; chaîne vide si inconnue.
+    async fn browser_origin(
+        &self,
+        #[zbus(header)] hdr: Header<'_>,
+        #[zbus(connection)] conn: &zbus::Connection,
+    ) -> fdo::Result<String> {
+        self.check_caller(&hdr, conn, false).await?;
+        let db = crate::browser::sailfish_browser_db();
+        Ok(blocking::unblock(move || crate::browser::last_visited_origin(&db)).await.unwrap_or_default())
+    }
+
     async fn status(&self) -> String {
         self.shared.lock().unwrap().status_json()
     }
@@ -844,7 +856,7 @@ impl Service {
             .summaries()
             .into_iter()
             .filter(|s| {
-                let hay = fold(&format!("{} {} {} {}", s.title, s.username, s.url, s.group));
+                let hay = fold(&format!("{} {} {} {} {}", s.title, s.username, s.url, s.extra_urls.join(" "), s.group));
                 tokens.iter().all(|t| hay.contains(t.as_str()))
             })
             .collect();
@@ -1154,7 +1166,7 @@ impl Service {
             .summaries()
             .into_iter()
             .filter(|s| {
-                let hay = fold(&format!("{} {} {} {}", s.title, s.username, s.url, s.group));
+                let hay = fold(&format!("{} {} {} {} {}", s.title, s.username, s.url, s.extra_urls.join(" "), s.group));
                 tokens.iter().all(|t| hay.contains(t.as_str()))
             })
             .collect();

@@ -75,6 +75,42 @@ pub struct EntrySummary {
     pub has_totp: bool,
     /// Période du code en secondes (0 sans TOTP).
     pub totp_period: u64,
+    /// URL secondaires (`KP2A_URL`, `KP2A_URL_1`… de Keepass2Android et KeePassXC).
+    #[serde(skip)]
+    pub extra_urls: Vec<String>,
+}
+
+/// URL secondaires d'une entrée : champs `KP2A_URL`, `KP2A_URL_1`… (Keepass2Android, « URL
+/// supplémentaires » de KeePassXC), champs nommés comme une URL (« URL2 », « url_1 »), et champs
+/// personnalisés dont la valeur est un lien http(s):// ou androidapp://.
+fn extra_urls(e: &keepass::db::EntryRef<'_>) -> Vec<String> {
+    const STANDARD: [&str; 6] = ["title", "username", "password", "url", "notes", "otp"];
+    let url_name = |k: &str| {
+        let k = k.to_ascii_lowercase();
+        let rest = k.strip_prefix("kp2a_").unwrap_or(&k);
+        rest.strip_prefix("url").is_some_and(|n| n.trim_start_matches([' ', '_', '-']).bytes().all(|b| b.is_ascii_digit()))
+    };
+    let link_value = |v: &str| {
+        let v = v.trim().to_ascii_lowercase();
+        v.starts_with("https://") || v.starts_with("http://") || v.starts_with("androidapp://")
+    };
+    let mut fields: Vec<(&String, String)> = e
+        .fields
+        .keys()
+        .filter(|k| !STANDARD.contains(&k.to_ascii_lowercase().as_str()) && k.as_str() != LINK_FIELD)
+        .filter_map(|k| e.get(k).map(|v| (k, v.trim().to_string())))
+        .filter(|(k, v)| !v.is_empty() && !v.contains('\n') && (url_name(k) || link_value(v)))
+        .collect();
+    fields.sort_by(|a, b| a.0.len().cmp(&b.0.len()).then_with(|| a.0.cmp(b.0)));
+    fields.into_iter().map(|(_, v)| v).collect()
+}
+
+/// URL principale puis URL secondaires.
+fn all_urls(e: &keepass::db::EntryRef<'_>) -> Vec<String> {
+    let mut v = vec![e.get_url().unwrap_or("").trim().to_string()];
+    v.extend(extra_urls(e));
+    v.retain(|u| !u.is_empty());
+    v
 }
 
 fn read_file(path: &Path) -> Result<(Zeroizing<Vec<u8>>, Fingerprint), String> {
@@ -157,8 +193,11 @@ impl Vault {
         if let Some(app) = origin.strip_prefix("app://") {
             let app = app.trim_end_matches('/');
             for e in self.live_entries() {
-                let url = e.get_url().unwrap_or("").trim().to_lowercase();
-                let url_match = url.trim_end_matches('/') == origin.trim_end_matches('/');
+                let urls: Vec<String> = all_urls(&e).iter().map(|u| u.to_lowercase()).collect();
+                let url_match = urls.iter().any(|u| {
+                    let u = u.trim_end_matches('/');
+                    u == origin.trim_end_matches('/') || u.strip_prefix("androidapp://") == Some(app)
+                });
                 // Champs « AndroidApp… » de KeePassDX / Keepass2Android : androidapp://paquet
                 let field_match = e.fields.iter().any(|(k, v)| {
                     k.to_lowercase().starts_with("androidapp")
@@ -167,12 +206,15 @@ impl Vault {
                 let title = e.get_title().unwrap_or("").to_lowercase();
                 // Segments significatifs du nom de paquet : com.netflix.mediaclient → « netflix ».
                 let tokens = app_tokens(app);
-                let url_core = host_of(&url)
+                let url_cores: Vec<String> = urls
+                    .iter()
+                    .filter_map(|u| host_of(u))
                     .map(|h| registrable(&h).split('.').next().unwrap_or("").to_string())
-                    .unwrap_or_default();
+                    .filter(|c| !c.is_empty())
+                    .collect();
                 let score = if url_match || field_match {
                     3
-                } else if !url_core.is_empty() && tokens.iter().any(|t| *t == url_core) {
+                } else if tokens.iter().any(|t| url_cores.contains(t)) {
                     2
                 } else if tokens.iter().any(|t| title.contains(t.as_str())) {
                     1
@@ -189,13 +231,19 @@ impl Vault {
         let domain = registrable(&host);
         let core = domain.split('.').next().unwrap_or("").to_string();
         for e in self.live_entries() {
-            let url = e.get_url().unwrap_or("").to_lowercase();
             let title = e.get_title().unwrap_or("").to_lowercase();
-            let score = match host_of(&url) {
-                Some(h) if h == host => 3,
-                Some(h) if registrable(&h) == domain => 2,
-                _ if core.len() >= 4 && title.contains(&core) => 1,
-                _ => 0,
+            let by_url = all_urls(&e)
+                .iter()
+                .filter_map(|u| host_of(u))
+                .map(|h| if h == host { 3 } else if registrable(&h) == domain { 2 } else { 0 })
+                .max()
+                .unwrap_or(0);
+            let score = if by_url > 0 {
+                by_url
+            } else if core.len() >= 4 && title.contains(&core) {
+                1
+            } else {
+                0
             };
             if score > 0 {
                 out.push((score, summary_of(&e)));
@@ -237,7 +285,9 @@ impl Vault {
         if let Some(e) = candidates.iter().find(|e| e.get(LINK_FIELD).map(str::trim) == Some(src.id.as_str())) {
             return Some(e.id().to_string());
         }
-        let src_keys = site_keys([src.url.as_str(), src.title.as_str()]);
+        let src_keys = site_keys(
+            [src.url.as_str(), src.title.as_str()].into_iter().chain(src.extra_urls.iter().map(String::as_str)),
+        );
         if src_keys.is_empty() {
             return None;
         }
@@ -247,23 +297,20 @@ impl Vault {
             .filter(|e| {
                 let d = described(e);
                 let issuer = d.as_ref().map(|d| d.issuer.clone()).unwrap_or_default();
-                let keys = site_keys([e.get_url().unwrap_or(""), e.get_title().unwrap_or(""), issuer.as_str()]);
+                let urls = all_urls(e);
+                let keys = site_keys(
+                    urls.iter().map(String::as_str).chain([e.get_title().unwrap_or(""), issuer.as_str()]),
+                );
                 keys.iter().any(|k| src_keys.contains(k))
             })
             .collect();
-        // Même identifiant d'abord, puis identifiant absent d'un côté ; jamais un autre compte.
-        let user_of = |e: &keepass::db::EntryRef<'_>| {
-            let u = e.get_username().unwrap_or("").trim().to_string();
-            if !u.is_empty() {
-                return u;
-            }
-            described(e).map(|d| d.account).unwrap_or_default()
-        };
+        // Même compte d'abord, puis compte inconnu ; jamais un autre compte.
         let src_user = src.username.trim();
+        let verdict = |e: &&keepass::db::EntryRef<'_>| entry_account(e, src_user);
         matching
             .iter()
-            .find(|e| same_account(&user_of(e), src_user) == Some(true))
-            .or_else(|| matching.iter().find(|e| same_account(&user_of(e), src_user).is_none()))
+            .find(|e| verdict(e) == Some(true))
+            .or_else(|| matching.iter().find(|e| verdict(e).is_none()))
             .map(|e| e.id().to_string())
     }
 
@@ -369,6 +416,7 @@ fn summary_of(e: &keepass::db::EntryRef<'_>) -> EntrySummary {
         group: e.parent().name.clone(),
         has_totp: totp_period > 0,
         totp_period,
+        extra_urls: extra_urls(e),
     }
 }
 
@@ -392,6 +440,22 @@ fn site_keys<'a>(texts: impl IntoIterator<Item = &'a str>) -> Vec<String> {
     keys.sort();
     keys.dedup();
     keys
+}
+
+/// Compte d'une entrée de la base des codes comparé à l'identifiant `src_user` : d'après son
+/// identifiant s'il est rempli ; sinon d'après le compte du lien otpauth, qui ne fait que
+/// confirmer (nom ou téléphone ≠ e-mail : inconnu), sauf deux adresses e-mail différentes.
+fn entry_account(e: &keepass::db::EntryRef<'_>, src_user: &str) -> Option<bool> {
+    let u = e.get_username().unwrap_or("").trim();
+    if !u.is_empty() {
+        return same_account(u, src_user);
+    }
+    let account = e.get("otp").and_then(crate::totp::describe).map(|d| d.account).unwrap_or_default();
+    match same_account(&account, src_user) {
+        Some(true) => Some(true),
+        Some(false) if account.contains('@') && src_user.contains('@') => Some(false),
+        _ => None,
+    }
 }
 
 /// Même compte ? Some(true) : identique (casse ignorée ; « boris@x.fr » et « boris » aussi),
@@ -761,6 +825,7 @@ mod tests {
             group: String::new(),
             has_totp: false,
             totp_period: 0,
+            extra_urls: Vec::new(),
         }
     }
 
@@ -811,6 +876,63 @@ mod tests {
         assert_eq!(v.counterpart(&fb_short, true), Some(fb_id.clone()));
         let fb_other = summary("99999999-9999-9999-9999-999999999999", "Facebook", "alice@mail.fr", "https://facebook.com");
         assert_eq!(v.counterpart(&fb_other, true), None);
+        // Sans identifiant, compte otpauth = un nom : ne contredit pas une adresse e-mail.
+        let snap = v.snapshot().unwrap();
+        let li_src = summary("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa", "LinkedIn", "", "");
+        let p = prepare_add_otp_entry(&snap, "", &li_src, "otpauth://totp/LinkedIn:Boris%20S?secret=JBSWY3DPEHPK3PXP&issuer=LinkedIn").unwrap();
+        let li_id = p.id.clone();
+        v.commit(&snap, p, &dir.join("backups"), 3).unwrap();
+        v.db.entry_mut(EntryId::from(uuid::Uuid::parse_str(&li_id).unwrap())).unwrap().set_unprotected(LINK_FIELD, "");
+        let li = summary("bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb", "LinkedIn", "boris@mail.fr", "https://www.linkedin.com");
+        assert_eq!(v.counterpart(&li, true), Some(li_id.clone()));
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn secondary_urls() {
+        let dir = std::env::temp_dir().join(format!("keepass-kbd-kp2a-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("m.kdbx");
+        let creds = || Credentials { password: Zeroizing::new("m".into()), keyfile: None };
+        create_database(&path, &creds(), "M").unwrap();
+        let mut v = Vault::open(&path, creds()).unwrap();
+        let id = {
+            let mut root = v.db.root_mut();
+            let mut e = root.add_entry();
+            e.set_unprotected("Title", "Compte perso");
+            e.set_unprotected("UserName", "boris@mail.fr");
+            e.set_unprotected("URL", "https://exemple.org");
+            e.set_unprotected("KP2A_URL", "https://accounts.google.com");
+            e.set_unprotected("KP2A_URL_1", "androidapp://com.google.android.gm");
+            e.set_unprotected("KP2A_URLX", "ignore.example");
+            e.set_unprotected("URL2", "www.amazon.ca");
+            e.set_unprotected("Page de secours", "https://m.facebook.com");
+            e.id().to_string()
+        };
+        let s = v.summary(&id).unwrap();
+        assert_eq!(s.extra_urls, vec![
+            "www.amazon.ca", "https://accounts.google.com", "androidapp://com.google.android.gm", "https://m.facebook.com"
+        ]);
+        let web = v.suggestions("https://accounts.google.com/signin");
+        assert!(web.iter().any(|(score, e)| *score == 3 && e.id == id));
+        assert!(v.suggestions("https://mail.google.com").iter().any(|(score, e)| *score == 2 && e.id == id));
+        assert!(v.suggestions("app://com.google.android.gm").iter().any(|(score, e)| *score == 3 && e.id == id));
+        assert!(v.suggestions("https://ignore.example").is_empty());
+        assert!(v.suggestions("https://www.amazon.ca/ap/signin").iter().any(|(score, e)| *score == 3 && e.id == id));
+        assert!(v.suggestions("https://m.facebook.com").iter().any(|(score, e)| *score == 3 && e.id == id));
+
+        // Base des codes : entrée « Google » sans identifiant, retrouvée grâce à l'URL secondaire.
+        let otp_path = dir.join("o.kdbx");
+        create_database(&otp_path, &creds(), "O").unwrap();
+        let mut o = Vault::open(&otp_path, creds()).unwrap();
+        let otp_id = {
+            let mut root = o.db.root_mut();
+            let mut e = root.add_entry();
+            e.set_unprotected("Title", "Google");
+            e.set_protected("otp", "otpauth://totp/Google:Boris?secret=JBSWY3DPEHPK3PXP&issuer=Google");
+            e.id().to_string()
+        };
+        assert_eq!(o.counterpart(&s, true), Some(otp_id));
         std::fs::remove_dir_all(&dir).unwrap();
     }
 

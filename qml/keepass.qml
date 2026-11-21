@@ -83,9 +83,7 @@ KeyboardLayout {
             try { r = JSON.parse(json) } catch (e) {}
             if (r.otp_locked) { root.unlockOtpThen("code"); return }
             if (!r.code) return
-            commit(r.code)
-            // Code tapé dans un champ numérique : retour au pavé numérique.
-            if (root.numberField) root.backToKeyboard()
+            codeTyper.type(r.code)
         }, function() { refreshStatus() })
     }
     readonly property string originLabel: origin.indexOf("app://") === 0 ? origin.substring(6)
@@ -100,6 +98,26 @@ KeyboardLayout {
         saveTitle = ""; saveUser = ""; saveUrl = ""
         otpInput = ""; otpCursor = -1; otpPreview = null; showOtpKey = false; imageItems = []
         autofill.stop()
+        codeTyper.stop(); codeTyper.queue = ""
+    }
+
+    // Saisie d'un code chiffre par chiffre, comme au pavé numérique de Jolla : certaines pages
+    // ignorent un code envoyé d'un seul bloc. Puis retour au pavé numérique pour un champ numérique.
+    Timer {
+        id: codeTyper
+        interval: 40
+        repeat: true
+        property string queue: ""
+        function type(code) { queue = code; restart() }
+        onTriggered: {
+            if (queue.length > 0) {
+                root.commit(queue.charAt(0))
+                queue = queue.substring(1)
+                return
+            }
+            stop()
+            if (root.numberField) root.backToKeyboard()
+        }
     }
 
     function commit(text) {
@@ -228,7 +246,15 @@ KeyboardLayout {
             futo.typedCall("NativeBrowserCredentialContext", [], function(json) {
                 var c = {}
                 try { c = JSON.parse(String(json)) } catch (e) {}
-                callback(c.available ? String(c.origin || "") : "")
+                if (c.available) { callback(String(c.origin || "")); return }
+                // Contexte du champ indisponible (cas habituel) : dernière page visitée, lue par le
+                // service dans la base du navigateur ; sinon onglet « actif » noté par le navigateur
+                // (souvent périmé).
+                daemon.typedCall("BrowserOrigin", [], function(o) {
+                    if (String(o || "") !== "") { callback(String(o)); return }
+                    futo.typedCall("CurrentBrowserOrigin", [], function(cur) { callback(String(cur || "")) },
+                                   function() { callback("") })
+                }, function() { callback("") })
             }, function() { callback("") })
         } else if (/firefox|fennec|chrome|chromium|browser|brave|opera|vivaldi|edge|duckduckgo/.test(id)) {
             futo.typedCall("CurrentAndroidBrowserOrigin", [{ "type": "s", "value": id }],
@@ -261,11 +287,21 @@ KeyboardLayout {
     function refreshOrigin() {
         resolveOrigin(function(o) {
             origin = o
+            // Autre site ou autre application : le filtre et le choix précédents ne valent plus.
+            // Site inconnu (FUTO ne sait pas toujours le dire) : rien n'est remis à zéro.
+            var key = originKey(o)
+            if (key !== "" && key !== lastOriginKey) {
+                lastOriginKey = key
+                if (query !== "") { query = ""; search() }
+                selected = null
+                userChose = false
+            }
             if (o === "") { suggestions = []; buildModel(); return }
             daemon.typedCall("Suggest", [{ "type": "s", "value": o }], function(json) {
                 try { suggestions = JSON.parse(json) } catch (e) { suggestions = [] }
-                // Présélection de la meilleure suggestion : les boutons du bas sont prêts.
-                if (suggestions.length > 0 && (!selected || query === "")) selected = suggestions[0]
+                // Présélection de la meilleure suggestion : les boutons du bas sont prêts. Une entrée
+                // touchée par l'utilisateur reste choisie tant qu'on ne change pas de site.
+                if (suggestions.length > 0 && (!selected || (!userChose && query === ""))) selected = bestSuggestion()
                 buildModel()
             }, function() { suggestions = []; buildModel() })
         })
@@ -326,6 +362,8 @@ KeyboardLayout {
                 var action = root.otpPending
                 root.otpPending = ""
                 root.mode = "list"; root.typing = false; root.editing = ""
+                // Codes maintenant connus : suggestions et entrées recalculées.
+                root.refreshOrigin(); root.search()
                 if (action === "code") root.insertTotp()
                 else if (action === "add") root.openOtpForm(root.selected)
             } else {
@@ -374,7 +412,14 @@ KeyboardLayout {
     // Remplissage automatique : identifiant, passage au champ suivant, mot de passe.
     function chooseEntry(entry) {
         selected = entry
+        userChose = true
         typing = false
+        // Champ numérique (code de double authentification) : le code de l'entrée, jamais son
+        // identifiant ; sans code connu, l'entrée est seulement choisie (bouton du code prêt).
+        if (numberField && !passwordField) {
+            if (entry.has_totp === true) insertTotp()
+            return
+        }
         if (passwordField) {
             insertField("password")
             return
@@ -539,6 +584,23 @@ KeyboardLayout {
     // Identifiant tapé sur la page : mémorisé par FUTO (lastCredentialUsername),
     // sinon par le suivi de secours ci-dessous. Uniquement en mémoire vive.
     property string trackedUsername: ""
+    property string lastOriginKey: ""
+    property bool userChose: false           // entrée touchée dans la liste (pas une présélection)
+
+    // Suggestion à présélectionner : le compte dont l'identifiant a été tapé sur la page, puis,
+    // dans un champ numérique (code de double authentification), un compte qui a un code.
+    function bestSuggestion() {
+        var user = String(pageUsername() || "").trim().toLowerCase()
+        if (user !== "") {
+            for (var i = 0; i < suggestions.length; ++i)
+                if (String(suggestions[i].username || "").trim().toLowerCase() === user) return suggestions[i]
+        }
+        if (numberField) {
+            for (var j = 0; j < suggestions.length; ++j)
+                if (suggestions[j].has_totp === true) return suggestions[j]
+        }
+        return suggestions[0]
+    }
 
     function originKey(o) {
         o = String(o || "").trim().toLowerCase()
@@ -760,6 +822,9 @@ KeyboardLayout {
             root.clearSecrets()
             root.trackedUsername = ""
             root.typing = false
+            // Clavier fermé : le filtre repart de zéro ; l'entrée choisie reste (page suivante du
+            // même site, champ du code par exemple), sauf changement de site (refreshOrigin).
+            if (root.query !== "") { root.query = ""; root.search() }
             if (root.mode === "otp" || root.mode === "otpimages" || root.mode === "otplocked") {
                 root.otpPending = ""
                 root.mode = "list"

@@ -6,6 +6,29 @@ after listing the changes under “Unreleased”.
 
 ## [Unreleased]
 
+## [1.1.2] - 2026-11-21
+### Added
+- Secondary URLs are used for suggestions, search and matching with the one-time codes database:
+  `KP2A_URL`, `KP2A_URL_1`… (Keepass2Android, KeePassXC “additional URLs”), fields named like a URL
+  (`URL2`, `url_1`…) and custom fields whose value is an `http(s)://` or `androidapp://` link; an
+  `androidapp://package` secondary URL matches that app.
+### Changed
+- In a number field (two-factor code), tapping an entry types its code instead of its username; an
+  entry without a known code is only selected.
+- Preselection: the account whose username was typed on the page first, then, in a number field, an
+  account that has a code. An entry tapped by hand stays selected on the next pages of the same site.
+- The search filter is cleared when the keyboard closes and when the site or app changes.
+- One-time codes are typed digit by digit, like the Jolla number pad (some pages ignored a code sent
+  in one block).
+- Suggestions are recomputed after the codes database is unlocked.
+### Fixed
+- Sailfish Browser: the current site was not found (the field context of FUTO is empty there, and the
+  “active tab” saved by the browser is stale). The service now reads the last page visited in an open
+  tab from the browser database (`sailfish-browser.sqlite`, read-only; only the origin is returned,
+  new `BrowserOrigin` D-Bus method). New dependency: `rusqlite` (bundled SQLite).
+- Separate codes database without a username: the account of the `otpauth` link now only confirms a
+  match; it rules one out only when both are different e-mail addresses.
+
 ## [1.1.1] - 2026-11-21
 ### Fixed
 - Codes of a separate one-time codes database were not found for entries created elsewhere (other

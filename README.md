@@ -13,8 +13,8 @@ no import, no second vault, and changes made elsewhere (KeePassXC, KeePassDX…)
 ## Features
 
 - **Fill logins in one tap** — tap an entry: the username is typed, the keyboard moves to the next field and types the password. Separate *Username* / *Password* buttons are also available.
-- **Suggestions** for the current website or app (matched on URL, domain, Android package or entry title).
-- **Search** across title, username, URL and folder, most recently used first.
+- **Suggestions** for the current website or app (matched on URL, secondary URLs `KP2A_URL`, `KP2A_URL_1`…, domain, Android package or entry title).
+- **Search** across title, username, URLs (secondary ones included) and folder, most recently used first.
 - **Password generator** (8–64 characters, lowercase / uppercase / digits / symbols), then **save** the new login: title and username are pre-filled from the current app or page, and the entry goes to a configurable folder (`keepass-kbd` by default).
 - **Safe writes** — before writing, the database is re-read and fully verified, a local backup is made, concurrent changes are detected and the file is replaced atomically. A system notification confirms the result.
 - **One-time codes (TOTP)**, optional — a *Code* button types the current two-factor code of the entry (`otp` field of KeePassXC / KeePassDX, `TimeOtp-*` fields of KeePass 2, legacy `TOTP Seed`; SHA-1/256/512, Steam). Off by default; the secret key never leaves the service.
