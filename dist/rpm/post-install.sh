@@ -24,3 +24,6 @@ systemctl enable keepass-kbd-numpad.service >/dev/null 2>&1 || :
 /usr/libexec/keepass-kbd/numpad-patch apply >/dev/null 2>&1 || :
 # Recharger le clavier pour prendre en compte les fichiers QML.
 for_each_session 'systemctl --user restart maliit-server.service'
+# Fermer l'application Paramètres, gardée en mémoire (-prestart) : elle garderait l'ancien
+# KpxStrings.js et afficherait les nouveaux textes en anglais. Relancée par D-Bus à l'ouverture.
+pkill -f '^/usr/bin/jolla-settings' 2>/dev/null || :

@@ -222,6 +222,43 @@ impl Vault {
         Ok(e.get(key).unwrap_or("").to_string())
     }
 
+    /// Résumé d'une entrée (titre, identifiant, URL…), sans secret.
+    pub fn summary(&self, id: &str) -> Option<EntrySummary> {
+        self.find(id).map(|e| summary_of(&e))
+    }
+
+    /// Entrée de cette base (base des codes) correspondant à une entrée de la base des mots de
+    /// passe : lien posé par le clavier (champ `KeePassKbd-Link`), sinon même site (URL) et même
+    /// identifiant, sinon même titre et même identifiant. `with_totp` : seulement les entrées
+    /// qui ont un code.
+    pub fn counterpart(&self, src: &EntrySummary, with_totp: bool) -> Option<String> {
+        let has = |e: &keepass::db::EntryRef<'_>| !with_totp || crate::totp::Spec::from_fields(|k| e.get(k)).is_some();
+        let same_user = |e: &keepass::db::EntryRef<'_>| {
+            let u = e.get_username().unwrap_or("").trim();
+            u.is_empty() || src.username.trim().is_empty() || u.eq_ignore_ascii_case(src.username.trim())
+        };
+        let candidates: Vec<_> = self.live_entries().filter(|e| has(e)).collect();
+        if let Some(e) = candidates.iter().find(|e| e.get(LINK_FIELD).map(str::trim) == Some(src.id.as_str())) {
+            return Some(e.id().to_string());
+        }
+        if let Some(host) = host_of(&src.url) {
+            let domain = registrable(&host);
+            if let Some(e) = candidates.iter().find(|e| {
+                host_of(e.get_url().unwrap_or("")).is_some_and(|h| registrable(&h) == domain) && same_user(e)
+            }) {
+                return Some(e.id().to_string());
+            }
+        }
+        let title = src.title.trim().to_lowercase();
+        if title.is_empty() {
+            return None;
+        }
+        candidates
+            .iter()
+            .find(|e| e.get_title().unwrap_or("").trim().to_lowercase() == title && same_user(e))
+            .map(|e| e.id().to_string())
+    }
+
     /// Code TOTP actuel d'une entrée : (code, secondes restantes, période).
     pub fn totp(&self, id: &str) -> Result<(String, u64, u64), String> {
         let e = self.find(id).ok_or("entry not found")?;
@@ -444,11 +481,78 @@ pub fn prepare_add(
     serialise(modified, &snap.key, id.to_string())
 }
 
+/// Champ des entrées de la base des codes : identifiant de l'entrée liée dans la base des mots de passe.
+pub const LINK_FIELD: &str = "KeePassKbd-Link";
+
+/// Réglages de dérivation de clé des bases créées ici : Argon2id, 64 Mio, comme KeePassXC.
+fn new_database_config() -> keepass::config::DatabaseConfig {
+    let mut cfg = keepass::config::DatabaseConfig::default();
+    cfg.kdf_config = keepass::config::KdfConfig::Argon2id {
+        iterations: NEW_DB_ITERATIONS,
+        memory: 64 * 1024 * 1024,
+        parallelism: 4,
+        version: argon2::Version::Version13,
+    };
+    cfg
+}
+/// Passes Argon2id : environ une seconde de déverrouillage sur un téléphone récent.
+const NEW_DB_ITERATIONS: u64 = 10;
+
+/// Crée une base vide (KDBX 4) protégée par `creds` ; refuse d'écraser un fichier existant.
+pub fn create_database(path: &Path, creds: &Credentials, name: &str) -> Result<(), String> {
+    if creds.password.is_empty() && creds.keyfile.is_none() {
+        return Err(crate::i18n::tr("a password or a key file is required"));
+    }
+    let mut db = Database::with_config(new_database_config());
+    db.meta.database_name = Some(name.to_string());
+    db.root_mut().name = name.to_string();
+    let mut out = Zeroizing::new(Vec::new());
+    db.save(&mut *out, creds.key()).map_err(|e| format!("serialisation: {e}"))?;
+    Database::parse(&out, creds.key()).map_err(open_err)?;
+    use crate::keyfile::PrivateMode;
+    let mut f = fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .mode_private()
+        .open(path)
+        .map_err(|e| crate::i18n::tr1("cannot create the file (%1)", &format!("{}: {e}", path.display())))?;
+    f.write_all(&out).and_then(|_| f.sync_all()).map_err(|e| e.to_string())
+}
+
+/// Prépare la création, dans la base des codes, de l'entrée qui porte le code d'une entrée
+/// de la base des mots de passe : titre, identifiant et URL recopiés, aucun mot de passe,
+/// champ `otp` et lien vers l'entrée d'origine.
+pub fn prepare_add_otp_entry(
+    snap: &Snapshot,
+    group_path: &str,
+    src: &EntrySummary,
+    uri: &str,
+) -> Result<Prepared, String> {
+    if !snap.fidelity_ok {
+        check_fidelity(&snap.raw, &snap.db, &snap.key)?;
+    }
+    let mut modified = snap.db.clone();
+    let group = ensure_group(&mut modified, group_path)?;
+    let id = {
+        let mut g = modified.group_mut(group).ok_or("target group not found")?;
+        let mut e = g.add_entry();
+        e.set_unprotected("Title", src.title.as_str());
+        e.set_unprotected("UserName", src.username.as_str());
+        e.set_protected("Password", "");
+        e.set_unprotected("URL", src.url.as_str());
+        e.set_unprotected("Notes", "");
+        e.set_protected("otp", uri);
+        e.set_unprotected(LINK_FIELD, src.id.as_str());
+        e.id()
+    };
+    serialise(modified, &snap.key, id.to_string())
+}
+
 /// Prépare l'ajout (ou le remplacement) du code à usage unique d'une entrée : champ protégé
 /// `otp` contenant l'URI otpauth. L'état précédent de l'entrée rejoint son historique, comme
 /// lors d'une modification dans KeePassXC. Les anciens champs TOTP éventuels sont laissés :
 /// le champ `otp` est lu en premier.
-pub fn prepare_set_otp(snap: &Snapshot, id: &str, uri: &str) -> Result<Prepared, String> {
+pub fn prepare_set_otp(snap: &Snapshot, id: &str, uri: &str, link: Option<&str>) -> Result<Prepared, String> {
     if !snap.fidelity_ok {
         check_fidelity(&snap.raw, &snap.db, &snap.key)?;
     }
@@ -458,6 +562,9 @@ pub fn prepare_set_otp(snap: &Snapshot, id: &str, uri: &str) -> Result<Prepared,
         let mut e = modified.entry_mut(EntryId::from(uuid)).ok_or_else(|| crate::i18n::tr("entry not found"))?;
         let mut tracked = e.track_changes();
         tracked.set_protected("otp", uri);
+        if let Some(link) = link {
+            tracked.set_unprotected(LINK_FIELD, link);
+        }
     }
     serialise(modified, &snap.key, id.to_string())
 }
@@ -592,7 +699,7 @@ mod tests {
         let db = Database::parse(&raw, key.clone()).unwrap();
         let snap = Snapshot { db, raw, sha256: [0; 32], key: key.clone(), fidelity_ok: false };
         let uri = "otpauth://totp/Site:boris?secret=JBSWY3DPEHPK3PXP&issuer=Site";
-        let prepared = prepare_set_otp(&snap, &id.to_string(), uri).unwrap();
+        let prepared = prepare_set_otp(&snap, &id.to_string(), uri, None).unwrap();
         let reread = Database::parse(&prepared.bytes, key).unwrap();
         let e = reread.entry(id).unwrap();
         assert_eq!(e.get("otp"), Some(uri));
@@ -600,7 +707,55 @@ mod tests {
         let history = e.history.as_ref().unwrap();
         assert_eq!(history.get_entries().len(), 1);
         assert_eq!(history.get_entries()[0].get("otp"), None);
-        assert!(prepare_set_otp(&snap, "00000000-0000-0000-0000-000000000000", uri).is_err());
+        assert!(prepare_set_otp(&snap, "00000000-0000-0000-0000-000000000000", uri, None).is_err());
+    }
+
+    fn summary(id: &str, title: &str, user: &str, url: &str) -> EntrySummary {
+        EntrySummary {
+            id: id.into(),
+            title: title.into(),
+            username: user.into(),
+            url: url.into(),
+            group: String::new(),
+            has_totp: false,
+            totp_period: 0,
+        }
+    }
+
+    #[test]
+    fn separate_otp_database() {
+        let dir = std::env::temp_dir().join(format!("keepass-kbd-otpdb-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("codes.kdbx");
+        let creds = || Credentials { password: Zeroizing::new("otp".into()), keyfile: None };
+        create_database(&path, &creds(), "Codes").unwrap();
+        assert!(create_database(&path, &creds(), "Codes").is_err(), "ne doit pas écraser");
+        let empty = Credentials { password: Zeroizing::new(String::new()), keyfile: None };
+        assert!(create_database(&dir.join("x.kdbx"), &empty, "x").is_err());
+
+        let mut v = Vault::open(&path, creds()).unwrap();
+        assert!(matches!(v.db.config.kdf_config, keepass::config::KdfConfig::Argon2id { .. }));
+        let uri = "otpauth://totp/GitHub:boris?secret=JBSWY3DPEHPK3PXP&issuer=GitHub";
+        let github = summary("11111111-1111-1111-1111-111111111111", "GitHub", "boris", "https://github.com/login");
+        // Ajout d'une entrée liée, écrite dans le fichier.
+        let snap = v.snapshot().unwrap();
+        let p = prepare_add_otp_entry(&snap, "", &github, uri).unwrap();
+        let new_id = p.id.clone();
+        v.commit(&snap, p, &dir.join("backups"), 3).unwrap();
+        let e = v.db.entry(EntryId::from(uuid::Uuid::parse_str(&new_id).unwrap())).unwrap();
+        assert_eq!(e.get(LINK_FIELD), Some(github.id.as_str()));
+        assert_eq!(e.get("Password"), Some(""));
+        // Lien, puis même site, puis même titre ; jamais un autre compte du même site.
+        assert_eq!(v.counterpart(&github, true), Some(new_id.clone()));
+        let same_site = summary("22222222-2222-2222-2222-222222222222", "Compte GH", "boris", "https://www.github.com/");
+        assert_eq!(v.counterpart(&same_site, true), Some(new_id.clone()));
+        let same_title = summary("33333333-3333-3333-3333-333333333333", "github", "", "");
+        assert_eq!(v.counterpart(&same_title, true), Some(new_id.clone()));
+        let other_user = summary("44444444-4444-4444-4444-444444444444", "GitHub", "alice", "https://github.com");
+        assert_eq!(v.counterpart(&other_user, true), None);
+        let other_site = summary("55555555-5555-5555-5555-555555555555", "Banque", "boris", "https://banque.example");
+        assert_eq!(v.counterpart(&other_site, true), None);
+        std::fs::remove_dir_all(&dir).unwrap();
     }
 
     #[test]

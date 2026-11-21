@@ -17,6 +17,8 @@ pub const RELOCK_POLICIES: &[(&str, &str)] = &[
 pub struct Config {
     /// Chemin de la base .kdbx.
     pub database: PathBuf,
+    /// Base des mots de passe utilisée par le clavier (faux = désactivée dans les Paramètres).
+    pub database_enabled: bool,
     /// Fichier clé facultatif.
     pub keyfile: Option<PathBuf>,
     /// Quand redemander le mot de passe maître : restart, 24h, 1h, 30min, 5min, wake.
@@ -29,6 +31,14 @@ pub struct Config {
     pub backups_keep: usize,
     /// Proposer les codes à usage unique (TOTP) des entrées dans le clavier.
     pub totp_enabled: bool,
+    /// Base séparée pour les codes à usage unique (vide = codes dans la base des mots de passe).
+    pub otp_database: PathBuf,
+    /// Groupe des nouvelles entrées de la base des codes ("" = racine).
+    pub otp_new_entry_group: String,
+    /// Fichier clé facultatif de la base des codes.
+    pub otp_keyfile: Option<PathBuf>,
+    /// Base des codes ouverte par le seul fichier clé, sans mot de passe.
+    pub otp_keyfile_only: bool,
     /// Exécutables autorisés à lire la base (le clavier).
     pub allowed_callers: Vec<PathBuf>,
     /// Exécutables autorisés à modifier les réglages et verrouiller (l'application Paramètres).
@@ -40,12 +50,17 @@ impl Default for Config {
         Config {
             // Aucune base par défaut : à choisir dans Paramètres › Entrée de texte › Clavier KeePass.
             database: PathBuf::new(),
+            database_enabled: true,
             keyfile: None,
             relock_policy: "30min".into(),
             poll_seconds: 15,
             new_entry_group: "keepass-kbd".into(),
             backups_keep: 20,
             totp_enabled: false,
+            otp_database: PathBuf::new(),
+            otp_new_entry_group: String::new(),
+            otp_keyfile: None,
+            otp_keyfile_only: false,
             allowed_callers: vec![PathBuf::from("/usr/bin/maliit-server")],
             settings_callers: vec![PathBuf::from("/usr/bin/jolla-settings")],
         }

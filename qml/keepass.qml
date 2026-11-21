@@ -58,6 +58,11 @@ KeyboardLayout {
 
     // Codes à usage unique (TOTP) : option des Paramètres, désactivée par défaut.
     property bool totpEnabled: false
+    // Base séparée des codes : "none" (codes dans la base principale), "locked", "unlocked", "missing".
+    property string otpState: "none"
+    property bool otpKeyfileOnly: false
+    // Action à reprendre après le déverrouillage de la base des codes : "code" ou "add".
+    property string otpPending: ""
     readonly property bool showTotp: totpEnabled && selected !== null && selected.has_totp === true
     property int totpRemaining: 0
     function updateTotpRemaining() {
@@ -76,6 +81,7 @@ KeyboardLayout {
         daemon.typedCall("Totp", [{ "type": "s", "value": selected.id }], function(json) {
             var r = {}
             try { r = JSON.parse(json) } catch (e) {}
+            if (r.otp_locked) { root.unlockOtpThen("code"); return }
             if (!r.code) return
             commit(r.code)
             // Code tapé dans un champ numérique : retour au pavé numérique.
@@ -102,6 +108,7 @@ KeyboardLayout {
     }
 
     property bool databaseConfigured: true
+    property bool databaseDisabled: false       // base des mots de passe désactivée dans les Paramètres
     property bool firstRunPrompted: false
     function openSettings() {
         settingsUi.call("showPage", ["system_settings/system/text_input/keepass_kbd"])
@@ -175,7 +182,15 @@ KeyboardLayout {
             try { s = JSON.parse(json) } catch (e) {}
             statusMessage = s.message || ""
             totpEnabled = !!s.totp_enabled
-            if (s.state === "unlocked") {
+            otpState = s.otp_state || "none"
+            otpKeyfileOnly = !!s.otp_keyfile_only
+            databaseDisabled = s.state === "disabled"
+            if (s.state === "disabled") {
+                if (mode === "pick") return
+                mode = "missing"; typing = false; editing = ""
+                entries = []; suggestions = []; selected = null
+                autofill.stop()
+            } else if (s.state === "unlocked") {
                 if (mode === "locked" || mode === "offline" || mode === "missing") {
                     mode = "list"; typing = false; editing = ""
                 }
@@ -287,7 +302,45 @@ KeyboardLayout {
                          }, function() { refreshStatus() })
     }
 
+    // ── Base séparée des codes à usage unique ─────────────────────────
+    // Verrouillée : mot de passe demandé sur le mini-clavier (mode "otplocked"), sauf si elle
+    // s'ouvre par le seul fichier clé ; puis reprise de l'action (code ou ajout).
+    function unlockOtpThen(action) {
+        otpPending = action
+        statusMessage = ""
+        if (otpKeyfileOnly) { unlockOtp(""); return }
+        masterPassword = ""; masterCursor = -1; showMaster = false
+        mode = "otplocked"; editing = "master"; typing = false
+    }
+
+    function unlockOtp(pw) {
+        busyText = t("Unlocking…")
+        daemon.typedCall("UnlockOtp", [{ "type": "s", "value": pw }], function(json) {
+            root.busyText = ""
+            var r = {}
+            try { r = JSON.parse(json) } catch (e) {}
+            if (r.ok) {
+                root.masterPassword = ""
+                root.statusMessage = ""
+                root.otpState = "unlocked"
+                var action = root.otpPending
+                root.otpPending = ""
+                root.mode = "list"; root.typing = false; root.editing = ""
+                if (action === "code") root.insertTotp()
+                else if (action === "add") root.openOtpForm(root.selected)
+            } else {
+                root.statusMessage = r.error || root.t("unlock failed")
+            }
+        }, function() { root.busyText = ""; root.statusMessage = root.t("service unavailable") })
+    }
+
     function unlock() {
+        if (mode === "otplocked") {
+            if ((masterPassword.length === 0 && !otpKeyfileOnly) || busyText !== "") return
+            showMaster = false
+            unlockOtp(masterPassword)
+            return
+        }
         if (masterPassword.length === 0 || busyText !== "") return
         showMaster = false
         busyText = t("Unlocking…")
@@ -619,6 +672,8 @@ KeyboardLayout {
                                  root.clearSecrets()
                                  root.mode = "list"; root.typing = false; root.editing = ""
                                  root.statusMessage = root.t("Saving the one-time code…")
+                             } else if (r.otp_locked) {
+                                 root.unlockOtpThen("add")
                              } else {
                                  root.statusMessage = r.error || root.t("save failed")
                              }
@@ -705,7 +760,10 @@ KeyboardLayout {
             root.clearSecrets()
             root.trackedUsername = ""
             root.typing = false
-            if (root.mode === "otp" || root.mode === "otpimages") root.mode = "list"
+            if (root.mode === "otp" || root.mode === "otpimages" || root.mode === "otplocked") {
+                root.otpPending = ""
+                root.mode = "list"
+            }
             if (canvas.activeIndex === root.layoutIndex) root.backToKeyboard()
         }
     }
@@ -747,7 +805,7 @@ KeyboardLayout {
                 spacing: Theme.paddingMedium
                 Icon {
                     anchors.verticalCenter: parent.verticalCenter
-                    source: root.mode === "locked" ? "image://theme/icon-m-device-lock"
+                    source: root.mode === "locked" || root.mode === "otplocked" ? "image://theme/icon-m-device-lock"
                           : root.mode === "pick" ? "image://theme/icon-m-folder"
                           : root.mode === "otp" || root.mode === "otpimages" ? "image://theme/icon-m-timer"
                           : "image://theme/icon-m-keys"
@@ -766,6 +824,7 @@ KeyboardLayout {
                               : root.mode === "save" ? root.t("Save to KeePass")
                               : root.mode === "pick" ? root.t("Choose a KeePass database")
                               : root.mode === "otp" ? root.t("One-time code")
+                              : root.mode === "otplocked" ? root.t("One-time codes database")
                               : root.mode === "otpimages" ? root.t("Image with the QR code")
                               : "KeePass"
                     }
@@ -780,7 +839,8 @@ KeyboardLayout {
                               : root.mode === "pick" ? root.pickPath
                               : (root.mode === "otp" || root.mode === "otpimages") && root.otpEntry
                                 ? (root.otpEntry.title || root.t("(untitled)"))
-                              : root.mode === "locked" ? root.t("Database locked")
+                              : root.mode === "locked" || root.mode === "otplocked" ? root.t("Database locked")
+                              : root.mode === "missing" && root.databaseDisabled ? root.t("Database disabled")
                               : root.mode === "missing" ? root.t("Database not found")
                               : root.mode === "offline" ? root.t("Service stopped")
                               : root.origin !== "" ? root.originLabel
@@ -796,6 +856,7 @@ KeyboardLayout {
                 KpxButton {
                     visible: root.mode === "list" || root.mode === "generate" || root.mode === "save"
                              || root.mode === "pick" || root.mode === "otp" || root.mode === "otpimages"
+                             || root.mode === "otplocked"
                     width: root.unit * 1.05; height: root.unit * 0.8
                     flat: true
                     iconSource: root.mode === "list" ? "image://theme/icon-m-add" : "image://theme/icon-m-back"
@@ -803,6 +864,10 @@ KeyboardLayout {
                         root.statusMessage = ""
                         if (root.mode === "pick") { root.mode = "missing"; root.pickItems = []; root.refreshStatus() }
                         else if (root.mode === "otpimages") { root.imageItems = []; root.mode = "otp" }
+                        else if (root.mode === "otplocked") {
+                            root.masterPassword = ""; root.otpPending = ""
+                            root.mode = "list"; root.typing = false; root.editing = ""
+                        }
                         else if (root.mode === "list") { root.mode = "generate"; root.typing = false; root.generate() }
                         else { root.clearSecrets(); root.mode = "list"; root.typing = false; root.editing = "" }
                     }
@@ -831,7 +896,7 @@ KeyboardLayout {
 
             // ── Déverrouillage (style des champs Sailfish : texte, trait, libellé) ──
             Item {
-                visible: root.mode === "locked"
+                visible: root.mode === "locked" || root.mode === "otplocked"
                 width: parent.width
                 height: root.unit * 1.2
 
@@ -839,11 +904,12 @@ KeyboardLayout {
                     id: masterField
                     anchors { left: parent.left; right: okButton.left; rightMargin: Theme.paddingMedium
                               leftMargin: Theme.paddingMedium; verticalCenter: parent.verticalCenter }
-                    label: root.t("Master password")
+                    label: root.mode === "otplocked" ? root.t("Password of the one-time codes database")
+                                                     : root.t("Master password")
                     value: root.masterPassword
                     secret: true
                     showSecret: root.showMaster
-                    editing: root.mode === "locked"
+                    editing: root.mode === "locked" || root.mode === "otplocked"
                     error: root.statusMessage !== ""
                     cursorPosition: root.cursorOf("master")
                     onCursorRequested: { root.editing = "master"; root.masterCursor = position }
@@ -857,7 +923,8 @@ KeyboardLayout {
                     height: Theme.iconSizeMedium + 2 * Theme.paddingSmall
                     highlighted: true
                     iconSource: "image://theme/icon-m-acknowledge"
-                    active: root.masterPassword.length > 0 && root.busyText === ""
+                    active: (root.masterPassword.length > 0 || (root.mode === "otplocked" && root.otpKeyfileOnly))
+                            && root.busyText === ""
                     onClicked: root.unlock()
                 }
             }
@@ -1029,8 +1096,17 @@ KeyboardLayout {
                         highlighted: root.numberField && !root.passwordField
                         onClicked: root.insertTotp()
                     }
+                    // Base des codes verrouillée : on ne sait pas encore si l'entrée a un code.
                     KpxButton {
-                        visible: parent.otpSlot && !root.showTotp
+                        visible: parent.otpSlot && !root.showTotp && root.otpState === "locked"
+                        width: parent.buttonWidth; height: parent.height
+                        iconSource: "image://theme/icon-m-device-lock"
+                        text: root.t("Code")
+                        highlighted: root.numberField && !root.passwordField
+                        onClicked: root.unlockOtpThen("code")
+                    }
+                    KpxButton {
+                        visible: parent.otpSlot && !root.showTotp && root.otpState !== "locked"
                         width: parent.buttonWidth; height: parent.height
                         iconSource: "image://theme/icon-m-add"
                         text: root.t("Code")
@@ -1391,11 +1467,12 @@ KeyboardLayout {
                     horizontalAlignment: Text.AlignHCenter
                     color: Theme.secondaryColor
                     text: root.mode === "offline" ? root.t("Start the service: systemctl --user start keepass-kbd")
+                          : root.databaseDisabled ? root.t("The password database is disabled in the KeePass Keyboard settings.")
                           : root.databaseConfigured ? root.t("The .kdbx file was not found. Check its location in the KeePass Keyboard settings.")
                           : root.t("No KeePass database selected yet.")
                 }
                 KpxButton {
-                    visible: root.mode === "missing"
+                    visible: root.mode === "missing" && !root.databaseDisabled
                     anchors.horizontalCenter: parent.horizontalCenter
                     width: Math.min(parent.width, Theme.itemSizeHuge * 2.6)
                     height: root.unit * 0.9
@@ -1452,13 +1529,13 @@ KeyboardLayout {
 
             KpxMiniKeyboard {
                 id: miniKeyboard
-                visible: root.mode === "locked"
+                visible: root.mode === "locked" || root.mode === "otplocked"
                          || (root.typing && (root.mode === "list" || root.mode === "save" || root.mode === "otp"))
                 anchors.bottom: parent.bottom
                 anchors.bottomMargin: Theme.paddingSmall
                 width: parent.width
                 rowHeight: root.unit * 0.8
-                enterLabel: root.mode === "locked" || root.mode === "otp" ? root.t("OK")
+                enterLabel: root.mode === "locked" || root.mode === "otplocked" || root.mode === "otp" ? root.t("OK")
                             : root.mode === "save" ? (root.editing === "url" ? root.t("Save") : root.t("Next"))
                             : root.t("Close")
                 lang: root.lang

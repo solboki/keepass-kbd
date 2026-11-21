@@ -53,6 +53,8 @@ assets = [
     { source = "settings/KeepassTextInputSettings.qml", dest = "/usr/share/jolla-settings/pages/keepass-kbd/KeepassTextInputSettings.qml", mode = "644" },
     { source = "settings/OtpEntriesPage.qml", dest = "/usr/share/jolla-settings/pages/keepass-kbd/OtpEntriesPage.qml", mode = "644" },
     { source = "settings/OtpCameraPage.qml", dest = "/usr/share/jolla-settings/pages/keepass-kbd/OtpCameraPage.qml", mode = "644" },
+    { source = "settings/DatabaseCreateDialog.qml", dest = "/usr/share/jolla-settings/pages/keepass-kbd/DatabaseCreateDialog.qml", mode = "644" },
+    { source = "settings/FilePicker.qml", dest = "/usr/share/jolla-settings/pages/keepass-kbd/FilePicker.qml", mode = "644" },
     { source = "qml/KpxStrings.js", dest = "/usr/share/jolla-settings/pages/keepass-kbd/KpxStrings.js", mode = "644" },
     { source = "settings/keepass-kbd.json", dest = "/usr/share/jolla-settings/entries/keepass-kbd.json", mode = "644" },
     { source = "target/rpm-stage/settings-keepass-kbd*.qm", dest = "/usr/share/translations/", mode = "644" },

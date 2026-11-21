@@ -1,6 +1,7 @@
 mod config;
 mod generator;
 mod i18n;
+mod keyfile;
 mod service;
 mod titles;
 mod qr;
@@ -93,6 +94,9 @@ fn daemon(args: &[String], cfg_path: &std::path::Path) -> Result<(), String> {
         last_stat: None,
         message: String::new(),
         usage: service::load_usage(),
+        otp_vault: None,
+        otp_unlocked_at: None,
+        otp_last_stat: None,
     }));
     let svc = service::Service { shared: shared.clone(), allow_any_caller };
     let conn = zbus::blocking::connection::Builder::session()

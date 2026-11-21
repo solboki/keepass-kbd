@@ -1,4 +1,5 @@
 // Paramètres › Entrée de texte › Clavier KeePass
+// Sections : Verrouillage, Base des mots de passe, Base des codes (OTP), À propos, Désinstallation.
 import QtQuick 2.0
 import Sailfish.Silica 1.0
 import Nemo.DBus 2.0
@@ -16,29 +17,119 @@ Page {
     property string statusText: ""
     property bool loaded: false
     property bool uninstalling: false
-    // Premier lancement (aucune base choisie) : ouvrir le navigateur de fichiers automatiquement.
+    property bool busy: false
+    readonly property bool editable: loaded && !uninstalling && !busy
+    readonly property bool mainEnabled: settings.database_enabled !== false
+    readonly property bool otpEnabled: !!settings.totp_enabled
+    readonly property bool otpSeparate: !!settings.otp_database
+    // Premier lancement (aucune base choisie) : ouvrir le choix du fichier automatiquement.
     property bool autoPicked: false
     Timer {
         id: autoPickTimer
         interval: 200
         repeat: true
-        onTriggered: if (page.status === PageStatus.Active && !pageStack.busy) { stop(); page.openPicker() }
+        onTriggered: if (page.status === PageStatus.Active && !pageStack.busy) { stop(); page.chooseDatabase("main") }
     }
     // Remplacé à l'installation par la version de Cargo.toml.
     readonly property string uiVersion: "@VERSION@"
 
     readonly property string lang: S.lang(Qt.locale().name)
     function t(key, arg) { return S.tr(lang, key, arg) }
+    function fileName(p) { return String(p || "").split("/").pop() }
 
-    function openGroups() { pageStack.push(groupPage) }
-    function openPicker() { pageStack.push(kdbxPicker) }
+    // Appel au service ; done reçoit la réponse JSON décodée ({ok:false, error} si injoignable).
+    function call(method, args, done) {
+        daemon.typedCall(method, args, function(json) {
+            var r = {}
+            try { r = JSON.parse(json) } catch (e) { r = { ok: true, value: json } }
+            if (done) done(r)
+        }, function() { if (done) done({ ok: false, error: page.t("keepass-kbd service unreachable") }) })
+    }
+    function str(v) { return { "type": "s", "value": v } }
+    function bool(v) { return { "type": "b", "value": v } }
+
+    function stateText(state, entries) {
+        return state === "unlocked" ? (entries !== undefined && entries !== null ? page.t("Unlocked · %1 entries", entries) : page.t("Unlocked"))
+             : state === "locked" ? page.t("Locked")
+             : state === "missing" ? page.t("Not found")
+             : state === "disabled" ? page.t("Disabled")
+             : ""
+    }
+
+    // Choix d'une base existante : "main" (mots de passe) ou "otp" (codes).
+    function chooseDatabase(target) {
+        var p = pageStack.push(Qt.resolvedUrl("FilePicker.qml"),
+                               { daemon: daemon, kind: "kdbx",
+                                 title: target === "main" ? t("Password database") : t("One-time codes database (OTP)") })
+        p.chosen.connect(function(path) {
+            call(target === "main" ? "SetDatabase" : "SetOtpDatabase", [str(path)], function(r) {
+                page.statusText = !r.ok ? (r.error || page.t("Unable to use this file"))
+                                : page.t("Database chosen. If it uses a key file, choose it below.")
+                page.reload()
+            })
+        })
+    }
+
+    // Création d'une base (et de son fichier clé) : la boîte se ferme, on revient ici, puis la
+    // base et le fichier clé sont créés et sélectionnés.
+    function newDatabase(target) {
+        var d = pageStack.push(Qt.resolvedUrl("DatabaseCreateDialog.qml"),
+                               { daemon: daemon, settings: settings, target: target })
+        d.accepted.connect(function() {
+            page.createDatabase(target, d.dbPath, d.password, d.keyPath, d.usesKey && d.newKey, d.keyOnly)
+        })
+    }
+    function createDatabase(target, dbPath, password, keyPath, newKey, keyOnly) {
+        busy = true
+        statusText = t("Creating the database…")
+        var fail = function(r) { page.busy = false; page.statusText = r.error || page.t("Setting not saved"); page.reload() }
+        var steps = [
+            function(next) { if (newKey) call("CreateKeyfile", [str(keyPath)], next); else next({ ok: true }) },
+            function(next) { call("CreateDatabase", [str(dbPath), str(password), str(keyPath)], next) },
+            function(next) { call(target === "main" ? "SetDatabase" : "SetOtpDatabase", [str(dbPath)], next) },
+            function(next) { call("SetKeyfile", [str(target), str(keyPath)], next) },
+            function(next) { if (target === "otp") call("SetOtpKeyfileOnly", [bool(keyOnly)], next); else next({ ok: true }) }
+        ]
+        var run = function(i) {
+            if (i === steps.length) {
+                page.busy = false
+                page.statusText = keyPath !== ""
+                        ? page.t("Database created and selected. Keep a copy of the key file %1 elsewhere: without it, the database cannot be opened.", keyPath)
+                        : page.t("Database created and selected.")
+                page.reload()
+                return
+            }
+            steps[i](function(r) { if (r.ok) run(i + 1); else fail(r) })
+        }
+        run(0)
+    }
+
+    // Fichier clé de la base des mots de passe ("main") ou de la base des codes ("otp").
+    function chooseKeyfile(target) {
+        var p = pageStack.push(Qt.resolvedUrl("FilePicker.qml"),
+                               { daemon: daemon, kind: "key", allowNone: true, title: t("Key file") })
+        p.chosen.connect(function(path) {
+            call("SetKeyfile", [str(target), str(path)], function(r) {
+                page.statusText = r.ok ? page.t("Key file saved. Unlock the database again from the keyboard.")
+                                       : (r.error || page.t("Unable to use this file"))
+                page.reload()
+            })
+        })
+    }
+
+    function setAndReload(method, args) {
+        call(method, args, function(r) {
+            page.statusText = r.ok === false ? (r.error || page.t("Setting not saved")) : ""
+            page.reload()
+        })
+    }
 
     function reload() {
         daemon.typedCall("GetSettings", [], function(json) {
             var s = {}
             try { s = JSON.parse(json) } catch (e) {}
             page.settings = s
-            if (!s.database && !page.autoPicked) {
+            if (!s.database && s.database_enabled !== false && !page.autoPicked) {
                 page.autoPicked = true
                 autoPickTimer.start()
             }
@@ -65,24 +156,24 @@ Page {
 
     Component.onCompleted: reload()
 
-    // ── Choix du dossier des nouvelles entrées ────────────────────────
+    // ── Choix du dossier des nouvelles entrées (target : "main" ou "otp") ──
     Component {
         id: groupPage
         Page {
             id: gp
+            property string target: "main"
             property var groups: null
             property string current: ""
 
             function choose(path) {
-                daemon.typedCall("SetNewEntryGroup", [{ "type": "s", "value": path }], function() {
+                page.call("SetNewEntryGroup", [page.str(gp.target), page.str(path)], function(r) {
+                    if (r.ok === false) page.statusText = page.t("Setting not saved")
                     page.reload()
                     pageStack.pop()
-                }, function() { page.statusText = page.t("Setting not saved") })
+                })
             }
 
-            Component.onCompleted: daemon.typedCall("ListGroups", [], function(json) {
-                var r = {}
-                try { r = JSON.parse(json) } catch (e) {}
+            Component.onCompleted: page.call("ListGroups", [page.str(gp.target)], function(r) {
                 gp.current = r.current || ""
                 var list = r.groups || null
                 if (list && list.indexOf("keepass-kbd") < 0) list.splice(1, 0, "keepass-kbd")
@@ -94,7 +185,11 @@ Page {
                 model: gp.groups || []
                 header: Column {
                     width: parent.width
-                    PageHeader { title: S.tr(S.lang(Qt.locale().name), "Folder for new entries") }
+                    PageHeader {
+                        // « page » désigne ici la propriété de PageHeader : passer par S.tr.
+                        title: S.tr(S.lang(Qt.locale().name), "Folder for new entries")
+                        description: S.tr(S.lang(Qt.locale().name), gp.target === "otp" ? "One-time codes database (OTP)" : "Password database")
+                    }
                     TextField {
                         width: parent.width
                         label: page.t("New folder (e.g. Internet/Apps)")
@@ -130,99 +225,7 @@ Page {
                         truncationMode: TruncationMode.Fade
                         color: modelData === gp.current ? Theme.highlightColor : Theme.primaryColor
                         text: modelData === "" ? page.t("Database root")
-                              : modelData.split("/").pop() + (modelData === "keepass-kbd" ? page.t(" (default)") : "")
-                    }
-                }
-                VerticalScrollDecorator {}
-            }
-        }
-    }
-
-    // ── Choix du fichier .kdbx ────────────────────────────────────────
-    // Navigateur alimenté par le service : l'application Paramètres (groupe « privileged »)
-    // ne peut pas lire les montages FUSE sans allow_other (rclone, sshfs…), le service si.
-    Component {
-        id: kdbxPicker
-        Page {
-            id: picker
-            property string path: ""
-            property var listing: ({})
-            property var items: []
-
-            function open(p) {
-                daemon.typedCall("ListDir", [{ "type": "s", "value": p }], function(json) {
-                    var r = {}
-                    try { r = JSON.parse(json) } catch (e) {}
-                    picker.listing = r
-                    picker.path = r.path || ""
-                    var list = []
-                    if (r.parent && r.path !== "/") list.push({ kind: "up", name: ".." })
-                    var d = r.dirs || [], f = r.files || []
-                    for (var i = 0; i < d.length; ++i) list.push({ kind: "dir", name: d[i] })
-                    for (var j = 0; j < f.length; ++j) list.push({ kind: "file", name: f[j] })
-                    picker.items = list
-                }, function() { page.statusText = page.t("keepass-kbd service unreachable") })
-            }
-
-            function choose(file) {
-                daemon.typedCall("SetDatabase", [{ "type": "s", "value": picker.path + "/" + file }], function(json) {
-                    var r = {}
-                    try { r = JSON.parse(json) } catch (e) {}
-                    page.statusText = r.ok ? page.t("New database saved. Unlock it from the keyboard.")
-                                           : (r.error || page.t("Unable to use this file"))
-                    page.reload()
-                    pageStack.pop()
-                }, function() { page.statusText = page.t("keepass-kbd service unreachable") })
-            }
-
-            Component.onCompleted: open("")
-
-            SilicaListView {
-                anchors.fill: parent
-                model: picker.items
-                header: Column {
-                    width: parent.width
-                    PageHeader {
-                        title: S.tr(S.lang(Qt.locale().name), "Choose a KeePass database")
-                        description: picker.path
-                    }
-                    Label {
-                        visible: !!picker.listing.error || picker.items.length === 0
-                        x: Theme.horizontalPageMargin
-                        width: parent.width - 2 * Theme.horizontalPageMargin
-                        wrapMode: Text.Wrap
-                        color: Theme.highlightColor
-                        text: picker.listing.error ? page.t("Cannot open this folder") : page.t("No folder or .kdbx file here")
-                        bottomPadding: Theme.paddingLarge
-                    }
-                }
-                delegate: ListItem {
-                    contentHeight: Theme.itemSizeSmall
-                    onClicked: {
-                        if (modelData.kind === "up") picker.open(picker.listing.parent)
-                        else if (modelData.kind === "dir") picker.open(picker.path.replace(/\/$/, "") + "/" + modelData.name)
-                        else picker.choose(modelData.name)
-                    }
-                    Icon {
-                        id: entryIcon
-                        x: Theme.horizontalPageMargin
-                        anchors.verticalCenter: parent.verticalCenter
-                        source: modelData.kind === "file" ? "image://theme/icon-m-keys"
-                              : modelData.kind === "up" ? "image://theme/icon-m-back" : "image://theme/icon-m-folder"
-                        color: modelData.kind === "file" ? Theme.highlightColor : Theme.primaryColor
-                    }
-                    Label {
-                        anchors { left: entryIcon.right; leftMargin: Theme.paddingMedium; right: parent.right
-                                  rightMargin: Theme.horizontalPageMargin; verticalCenter: parent.verticalCenter }
-                        truncationMode: TruncationMode.Fade
-                        color: modelData.kind === "file" ? Theme.highlightColor : Theme.primaryColor
-                        text: modelData.kind === "up" ? page.t("Parent folder") : modelData.name
-                    }
-                }
-                PullDownMenu {
-                    MenuItem {
-                        text: page.t("Home folder")
-                        onClicked: picker.open(picker.listing.home || "")
+                              : modelData.split("/").pop() + (modelData === "keepass-kbd" && gp.target === "main" ? page.t(" (default)") : "")
                     }
                 }
                 VerticalScrollDecorator {}
@@ -289,7 +292,7 @@ Page {
         PullDownMenu {
             MenuItem {
                 text: page.t("Lock now")
-                enabled: page.settings.state === "unlocked"
+                enabled: page.settings.state === "unlocked" || page.settings.otp_state === "unlocked"
                 onClicked: daemon.typedCall("Lock", [], function() { page.reload() })
             }
         }
@@ -298,12 +301,7 @@ Page {
             id: column
             width: parent.width
 
-            PageHeader {
-                title: page.t("KeePass Keyboard")
-                description: page.settings.state === "unlocked" ? page.t("Database unlocked · %1 entries", page.settings.entries)
-                             : page.settings.state === "missing" ? page.t("Database not found")
-                             : page.loaded ? page.t("Database locked") : ""
-            }
+            PageHeader { title: page.t("KeePass Keyboard") }
 
             Label {
                 visible: page.statusText !== ""
@@ -315,11 +313,23 @@ Page {
                 bottomPadding: Theme.paddingMedium
             }
 
-            SectionHeader { text: page.t("Security") }
+            // ── Verrouillage ──────────────────────────────────────────
+            SectionHeader { text: page.t("Locking") }
 
+            DetailItem {
+                label: page.t("Password database")
+                value: page.loaded ? page.stateText(page.settings.state, page.settings.entries) : ""
+            }
+            DetailItem {
+                label: page.t("One-time codes database (OTP)")
+                value: !page.loaded ? ""
+                       : !page.otpEnabled ? page.t("Disabled")
+                       : !page.otpSeparate ? page.t("In the password database")
+                       : page.stateText(page.settings.otp_state)
+            }
             ComboBox {
                 id: policyBox
-                enabled: page.loaded && !page.uninstalling
+                enabled: page.editable
                 label: page.t("Ask for the master password again")
                 description: page.t("The phone stays protected by its PIN and fingerprint. “On every wake-up” locks the database as soon as the screen turns off.")
                 menu: ContextMenu {
@@ -332,86 +342,175 @@ Page {
                     if (!page.loaded || currentIndex < 0) return
                     var id = page.policies[currentIndex]
                     if (id === page.settings.relock_policy) return
-                    daemon.typedCall("SetRelockPolicy", [{ "type": "s", "value": id }],
-                                     function() { page.statusText = ""; page.reload() },
-                                     function() { page.statusText = page.t("Setting not saved") })
+                    page.setAndReload("SetRelockPolicy", [page.str(id)])
                 }
             }
+
+            // ── Base des mots de passe ────────────────────────────────
+            SectionHeader { text: page.t("Password database") }
 
             TextSwitch {
-                id: totpSwitch
-                enabled: page.loaded && !page.uninstalling
+                enabled: page.editable
                 automaticCheck: false
-                checked: !!page.settings.totp_enabled
-                text: page.t("One-time codes (TOTP)")
-                description: page.t("Adds a “Code” button to the keyboard for entries that have a two-factor code (otp field of KeePassXC and KeePassDX, TimeOtp fields of KeePass 2). The secret key never leaves the service.")
-                onClicked: daemon.typedCall("SetTotpEnabled", [{ "type": "b", "value": !checked }],
-                                            function() { page.statusText = ""; page.reload() },
-                                            function() { page.statusText = page.t("Setting not saved") })
+                checked: page.mainEnabled
+                text: page.t("Enabled")
+                description: page.t("Turned off, the keyboard no longer opens this database.")
+                onClicked: page.setAndReload("SetDatabaseEnabled", [page.bool(!checked)])
             }
-
-            // Ajout du code d'une entrée : clé, lien otpauth://, capture d'écran ou appareil photo.
-            BackgroundItem {
-                visible: !!page.settings.totp_enabled
-                enabled: page.loaded && !page.uninstalling
-                height: Theme.itemSizeMedium
-                onClicked: pageStack.push(Qt.resolvedUrl("OtpEntriesPage.qml"))
-                Icon {
-                    id: otpAddIcon
+            Column {
+                width: parent.width
+                visible: page.mainEnabled
+                DetailItem { label: page.t("File"); value: String(page.settings.database || "") !== "" ? page.fileName(String(page.settings.database || "")) : page.t("None") }
+                Label {
+                    visible: String(page.settings.database || "") !== ""
                     x: Theme.horizontalPageMargin
-                    anchors.verticalCenter: parent.verticalCenter
-                    source: "image://theme/icon-m-timer"
-                    color: parent.highlighted ? Theme.highlightColor : Theme.primaryColor
+                    width: parent.width - 2 * Theme.horizontalPageMargin
+                    wrapMode: Text.WrapAnywhere
+                    font.pixelSize: Theme.fontSizeExtraSmall
+                    color: Theme.secondaryColor
+                    text: String(page.settings.database || "")
                 }
+                Item { width: 1; height: Theme.paddingMedium }
                 Column {
-                    anchors { left: otpAddIcon.right; leftMargin: Theme.paddingMedium; right: parent.right
-                              rightMargin: Theme.horizontalPageMargin; verticalCenter: parent.verticalCenter }
-                    Label {
-                        width: parent.width
-                        truncationMode: TruncationMode.Fade
-                        color: parent.parent.highlighted ? Theme.highlightColor : Theme.primaryColor
-                        text: page.t("Add a one-time code to an entry")
+                    width: parent.width
+                    spacing: Theme.paddingMedium
+                    Button { anchors.horizontalCenter: parent.horizontalCenter; preferredWidth: Theme.buttonWidthLarge
+                             text: page.t("Choose another file…"); enabled: page.editable; onClicked: page.chooseDatabase("main") }
+                    Button { anchors.horizontalCenter: parent.horizontalCenter; preferredWidth: Theme.buttonWidthLarge
+                             text: page.t("Create a new database…"); enabled: page.editable; onClicked: page.newDatabase("main") }
+                }
+                Item { width: 1; height: Theme.paddingMedium }
+                ValueButton {
+                    label: page.t("Key file")
+                    value: page.settings.keyfile ? page.fileName(page.settings.keyfile) : page.t("None")
+                    description: page.t("If the database is also protected by a key file")
+                    enabled: page.editable
+                    onClicked: page.chooseKeyfile("main")
+                }
+                ValueButton {
+                    label: page.t("Folder for new entries")
+                    value: page.settings.new_entry_group ? page.settings.new_entry_group : page.t("Database root")
+                    description: page.t("Created automatically on first save if it does not exist")
+                    enabled: page.editable
+                    onClicked: pageStack.push(groupPage, { target: "main" })
+                }
+            }
+
+            // ── Base des codes à usage unique ─────────────────────────
+            SectionHeader { text: page.t("One-time codes database (OTP)") }
+
+            TextSwitch {
+                enabled: page.editable
+                automaticCheck: false
+                checked: page.otpEnabled
+                text: page.t("Enabled")
+                description: page.t("Adds a “Code” button to the keyboard for entries that have a two-factor code (otp field of KeePassXC and KeePassDX, TimeOtp fields of KeePass 2). The secret key never leaves the service.")
+                onClicked: page.setAndReload("SetTotpEnabled", [page.bool(!checked)])
+            }
+            Column {
+                width: parent.width
+                visible: page.otpEnabled
+                DetailItem { label: page.t("File"); value: String(page.settings.otp_database || "") !== "" ? page.fileName(String(page.settings.otp_database || "")) : page.t("Password database") }
+                Label {
+                    visible: String(page.settings.otp_database || "") !== ""
+                    x: Theme.horizontalPageMargin
+                    width: parent.width - 2 * Theme.horizontalPageMargin
+                    wrapMode: Text.WrapAnywhere
+                    font.pixelSize: Theme.fontSizeExtraSmall
+                    color: Theme.secondaryColor
+                    text: String(page.settings.otp_database || "")
+                }
+                Item { width: 1; height: Theme.paddingMedium }
+                Column {
+                    width: parent.width
+                    spacing: Theme.paddingMedium
+                    Button { anchors.horizontalCenter: parent.horizontalCenter; preferredWidth: Theme.buttonWidthLarge
+                             text: page.t("Choose another file…"); enabled: page.editable; onClicked: page.chooseDatabase("otp") }
+                    Button { anchors.horizontalCenter: parent.horizontalCenter; preferredWidth: Theme.buttonWidthLarge
+                             text: page.t("Create a new database…"); enabled: page.editable; onClicked: page.newDatabase("otp") }
+                    Button {
+                        anchors.horizontalCenter: parent.horizontalCenter
+                        preferredWidth: Theme.buttonWidthLarge
+                        visible: page.otpSeparate
+                        text: page.t("Use the password database")
+                        enabled: page.editable
+                        onClicked: page.call("SetOtpDatabase", [page.str("")], function(r) {
+                            page.statusText = r.ok ? page.t("One-time codes are read from the password database.")
+                                                   : (r.error || page.t("Setting not saved"))
+                            page.reload()
+                        })
                     }
-                    Label {
-                        width: parent.width
-                        truncationMode: TruncationMode.Fade
-                        font.pixelSize: Theme.fontSizeExtraSmall
-                        color: parent.parent.highlighted ? Theme.secondaryHighlightColor : Theme.secondaryColor
-                        text: page.t("Secret key, screenshot or camera")
+                }
+                Label {
+                    visible: !page.otpSeparate
+                    x: Theme.horizontalPageMargin
+                    width: parent.width - 2 * Theme.horizontalPageMargin
+                    wrapMode: Text.Wrap
+                    font.pixelSize: Theme.fontSizeExtraSmall
+                    color: Theme.secondaryHighlightColor
+                    topPadding: Theme.paddingMedium
+                    text: page.t("Keeping the one-time codes in another database, with another password or a key file, means that someone who learns your master password still lacks the second factor.")
+                }
+                Item { width: 1; height: Theme.paddingMedium }
+                ValueButton {
+                    visible: page.otpSeparate
+                    label: page.t("Key file")
+                    value: page.settings.otp_keyfile ? page.fileName(page.settings.otp_keyfile) : page.t("None")
+                    description: page.t("If the database is also protected by a key file")
+                    enabled: page.editable
+                    onClicked: page.chooseKeyfile("otp")
+                }
+                TextSwitch {
+                    visible: page.otpSeparate && !!page.settings.otp_keyfile
+                    enabled: page.editable
+                    automaticCheck: false
+                    checked: !!page.settings.otp_keyfile_only
+                    text: page.t("Key file only")
+                    description: page.t("The codes database opens without a password, with the key file alone.")
+                    onClicked: page.setAndReload("SetOtpKeyfileOnly", [page.bool(!checked)])
+                }
+                ValueButton {
+                    visible: page.otpSeparate
+                    label: page.t("Folder for new entries")
+                    value: page.settings.otp_new_entry_group ? page.settings.otp_new_entry_group : page.t("Database root")
+                    description: page.t("Created automatically on first save if it does not exist")
+                    enabled: page.editable
+                    onClicked: pageStack.push(groupPage, { target: "otp" })
+                }
+
+                // Ajout du code d'une entrée : clé, lien otpauth://, capture d'écran ou appareil photo.
+                BackgroundItem {
+                    enabled: page.editable
+                    height: Theme.itemSizeMedium
+                    onClicked: pageStack.push(Qt.resolvedUrl("OtpEntriesPage.qml"))
+                    Icon {
+                        id: otpAddIcon
+                        x: Theme.horizontalPageMargin
+                        anchors.verticalCenter: parent.verticalCenter
+                        source: "image://theme/icon-m-timer"
+                        color: parent.highlighted ? Theme.highlightColor : Theme.primaryColor
+                    }
+                    Column {
+                        anchors { left: otpAddIcon.right; leftMargin: Theme.paddingMedium; right: parent.right
+                                  rightMargin: Theme.horizontalPageMargin; verticalCenter: parent.verticalCenter }
+                        Label {
+                            width: parent.width
+                            truncationMode: TruncationMode.Fade
+                            color: parent.parent.highlighted ? Theme.highlightColor : Theme.primaryColor
+                            text: page.t("Add a one-time code to an entry")
+                        }
+                        Label {
+                            width: parent.width
+                            truncationMode: TruncationMode.Fade
+                            font.pixelSize: Theme.fontSizeExtraSmall
+                            color: parent.parent.highlighted ? Theme.secondaryHighlightColor : Theme.secondaryColor
+                            text: page.t("Secret key, screenshot or camera")
+                        }
                     }
                 }
             }
 
-            SectionHeader { text: page.t("Database") }
-
-            DetailItem {
-                label: page.t("File")
-                value: String(page.settings.database || "").split("/").pop()
-            }
-            Label {
-                x: Theme.horizontalPageMargin
-                width: parent.width - 2 * Theme.horizontalPageMargin
-                wrapMode: Text.WrapAnywhere
-                font.pixelSize: Theme.fontSizeExtraSmall
-                color: Theme.secondaryColor
-                text: String(page.settings.database || "")
-            }
-            Item { width: 1; height: Theme.paddingLarge }
-            Button {
-                anchors.horizontalCenter: parent.horizontalCenter
-                text: page.t("Choose another file…")
-                enabled: page.loaded && !page.uninstalling
-                onClicked: page.openPicker()
-            }
-            Item { width: 1; height: Theme.paddingLarge }
-            ValueButton {
-                label: page.t("Folder for new entries")
-                value: page.settings.new_entry_group ? page.settings.new_entry_group : page.t("Database root")
-                description: page.t("Created automatically on first save if it does not exist")
-                enabled: page.loaded && !page.uninstalling
-                onClicked: page.openGroups()
-            }
-
+            // ── À propos (et crédits) ─────────────────────────────────
             SectionHeader { text: page.t("About") }
 
             DetailItem {
@@ -422,8 +521,16 @@ Page {
             DetailItem { label: page.t("Author"); value: "Boris Solodki" }
             DetailItem { label: page.t("Contact"); value: "solboki@solodki.fr" }
 
-            SectionHeader { text: page.t("Credits") }
-
+            Label {
+                x: Theme.horizontalPageMargin
+                width: parent.width - 2 * Theme.horizontalPageMargin
+                wrapMode: Text.Wrap
+                font.pixelSize: Theme.fontSizeSmall
+                color: Theme.highlightColor
+                topPadding: Theme.paddingLarge
+                bottomPadding: Theme.paddingSmall
+                text: page.t("Credits")
+            }
             Label {
                 x: Theme.horizontalPageMargin
                 width: parent.width - 2 * Theme.horizontalPageMargin
@@ -444,6 +551,7 @@ Page {
                 bottomPadding: Theme.paddingLarge
             }
 
+            // ── Désinstallation ───────────────────────────────────────
             SectionHeader { text: page.t("Uninstall") }
 
             Button {

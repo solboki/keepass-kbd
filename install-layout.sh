@@ -13,7 +13,7 @@ install -m 644 "$SRC/dist/layouts_keepass.conf" "$DEST/"
 install -m 644 "$SRC/qml/handlers/KeepassInputHandler.qml" /usr/share/maliit/plugins/com/jolla/handlers/
 mkdir -p "$PAGES"
 stamp "$SRC/settings/main.qml" "$PAGES/main.qml"
-install -m 644 "$SRC/settings/KeepassTextInputSettings.qml" "$SRC/settings/OtpEntriesPage.qml" "$SRC/settings/OtpCameraPage.qml" "$SRC/qml/KpxStrings.js" "$PAGES/"
+install -m 644 "$SRC/settings/KeepassTextInputSettings.qml" "$SRC/settings/OtpEntriesPage.qml" "$SRC/settings/OtpCameraPage.qml" "$SRC/settings/DatabaseCreateDialog.qml" "$SRC/settings/FilePicker.qml" "$SRC/qml/KpxStrings.js" "$PAGES/"
 install -m 644 "$SRC"/translations/settings-keepass-kbd*.qm /usr/share/translations/
 install -D -m 644 "$SRC/settings/keepass-kbd.json" /usr/share/jolla-settings/entries/keepass-kbd.json
 install -D -m 644 "$SRC/assets/keepass-kbd-256.png" /usr/share/keepass-kbd/keepass-kbd.png

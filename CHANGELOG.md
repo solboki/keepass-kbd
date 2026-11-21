@@ -18,6 +18,25 @@ after listing the changes under “Unreleased”.
   the code is saved in the `otp` field (KeePassXC / KeePassDX format) with the previous version kept in
   the entry history. New D-Bus methods `OtpPreview`, `SetOtp`, `OtpFromImage`, `RecentImages`,
   `OtpEntries`, `OtpScanPath`; the Settings app may now list entry titles and usernames for this.
+- Separate database for one-time codes (optional): protected by its own password, password and key
+  file, or key file only; chosen or created from the settings, unlocked from the keyboard when a code is
+  needed, locked with the password database. Codes added from the keyboard or the settings go into
+  it, linked to the password entry (`KeePassKbd-Link` field); existing entries are matched by website
+  and username, then by title and username. Backups in `backups-otp`.
+- Key files: choose the key file of the password database in the settings; create key files (KeePass
+  XML 2.0). New databases use Argon2id with 64 MiB. New D-Bus methods `UnlockOtp`, `SetOtpDatabase`,
+  `SetKeyfile`, `SetOtpKeyfileOnly`, `ListFiles`, `CreateKeyfile`, `CreateDatabase`.
+- Settings reorganised into *Locking* (state of both databases, re-lock delay), *Password database*,
+  *One-time codes database (OTP)*, *About* (with the credits) and *Uninstall*. Each database section
+  has an on/off switch, the file and its path, *Choose another file…*, *Create a new database…*, the key
+  file and the folder for new entries. A database created here, and its new key file, are selected
+  right away and the settings page is shown again.
+- The password database can be turned off (`SetDatabaseEnabled`); the keyboard then shows it as
+  disabled. Folder for new entries of the codes database (`ListGroups` and `SetNewEntryGroup` now take
+  the target database, "main" or "otp").
+### Fixed
+- New settings texts shown in English after an update: the Settings app, kept in memory, is now
+  closed on install so that it reloads the translations.
 - KeePass key in the Jolla number and phone pads: code fields open one of these pads, which allow no
   layout change; a KeePass key (bottom left) now opens the KeePass layout, and typing the code returns to
   the pad. The package adds a few marked lines to the pad files of `jolla-keyboard`
