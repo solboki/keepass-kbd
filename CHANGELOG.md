@@ -34,14 +34,14 @@ after listing the changes under “Unreleased”.
 - The password database can be turned off (`SetDatabaseEnabled`); the keyboard then shows it as
   disabled. Folder for new entries of the codes database (`ListGroups` and `SetNewEntryGroup` now take
   the target database, "main" or "otp").
-### Fixed
-- New settings texts shown in English after an update: the Settings app, kept in memory, is now
-  closed on install so that it reloads the translations.
 - KeePass key in the Jolla number and phone pads: code fields open one of these pads, which allow no
   layout change; a KeePass key (bottom left) now opens the KeePass layout, and typing the code returns to
   the pad. The package adds a few marked lines to the pad files of `jolla-keyboard`
   (`/usr/libexec/keepass-kbd/numpad-patch`); `keepass-kbd-numpad.service` puts them back at boot after a
   Sailfish OS update, and uninstalling restores the original files.
+### Fixed
+- New settings texts shown in English after an update: the Settings app, kept in memory, is now
+  closed on install so that it reloads the translations.
 
 ## [1.0.2] - 2026-11-20
 ### Changed
