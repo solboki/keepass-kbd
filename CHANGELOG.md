@@ -5,6 +5,8 @@ incompatible change → `major`. Bump with `scripts/bump-version.sh patch|minor|
 after listing the changes under “Unreleased”.
 
 ## [Unreleased]
+### Added
+- RPMs for armv7hl (32-bit ARM) and i486 (x86), cross-compiled with Zig: `scripts/build-rpm.sh armv7hl|i486|all`.
 
 ## [1.1.2] - 2026-11-21
 ### Added

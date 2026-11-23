@@ -29,7 +29,8 @@ no import, no second vault, and changes made elsewhere (KeePassXC, KeePassDX…)
 
 ## Requirements
 
-- Sailfish OS 5.x, **aarch64** (tested on Sailfish OS 5.2 / Jolla Phone).
+- Sailfish OS 5.x, **aarch64** (tested on Sailfish OS 5.2 / Jolla Phone). RPMs are also provided for
+  **armv7hl** (32-bit ARM) and **i486** (x86, emulator); these are cross-compiled and not tested on a device.
 - The stock Jolla keyboard (installed by default).
 - **[FUTO Keyboard for Sailfish](https://github.com/solboki/futo-keyboard-sailfish) — optional but recommended.**
   KeePass Keyboard works on its own (filling, search, generator, saving, settings, suggestions for native apps).
@@ -38,10 +39,10 @@ no import, no second vault, and changes made elsewhere (KeePassXC, KeePassDX…)
 
 ## Installation
 
-1. Download `keepass-kbd-<version>-1.aarch64.rpm` from the [Releases](https://github.com/solboki/keepass-kbd/releases) page.
+1. Download `keepass-kbd-<version>-1.<arch>.rpm` (`aarch64`, `armv7hl` or `i486`; `uname -m` tells which: `armv7l` → `armv7hl`, `i686` → `i486`) from the [Releases](https://github.com/solboki/keepass-kbd/releases) page.
 2. Install it, either by opening the file from the *Downloads* / *File browser* (allow untrusted software in *Settings › Untrusted software*), or in a terminal:
    ```sh
-   devel-su pkcon install-local keepass-kbd-*.aarch64.rpm
+   devel-su pkcon install-local keepass-kbd-*.rpm
    ```
 3. The **KeePass** layout is enabled automatically next to your keyboards. Open *Settings › Text input › KeePass Keyboard* (or tap the gear icon in the layout) and **choose your `.kdbx` file**.
 
@@ -91,7 +92,17 @@ On the phone (or a Sailfish SDK aarch64 target) with Rust and [`cargo-generate-r
 ```sh
 cargo install cargo-generate-rpm
 scripts/build-rpm.sh          # → target/generate-rpm/keepass-kbd-<version>-1.aarch64.rpm
+scripts/build-rpm.sh all      # + armv7hl and i486 RPMs (cross-compiled, see below)
 cargo test                    # unit tests
+```
+
+The armv7hl and i486 RPMs are cross-compiled with [Zig](https://ziglang.org) as C compiler and linker
+(`scripts/cross/`), against glibc 2.30:
+
+```sh
+rustup target add armv7-unknown-linux-gnueabihf i686-unknown-linux-gnu
+# Zig 0.14.1 unpacked in ~/.local/opt/zig-aarch64-linux-0.14.1 (or set ZIG=/path/to/zig)
+scripts/build-rpm.sh armv7hl  # or i486, or all
 ```
 
 Project layout:
@@ -102,7 +113,7 @@ Project layout:
 | `qml/` | Maliit keyboard layout (`keepass.qml`), components and UI translations (`KpxStrings.js`) |
 | `settings/` | Settings pages and *Text input* entry |
 | `dist/` | systemd/D-Bus files, RPM scriptlets, polkit policy, uninstall scripts |
-| `scripts/` | `build-rpm.sh`, `bump-version.sh`, `mkqm.py` (Qt `.qm` catalogs without `lrelease`) |
+| `scripts/` | `build-rpm.sh`, `cross/` (Zig wrappers for 32-bit builds), `bump-version.sh`, `mkqm.py` (Qt `.qm` catalogs without `lrelease`) |
 
 `install-layout.sh` and `install-user.sh` are kept for development installs without a package (do not mix with the RPM).
 Versions follow [SemVer](https://semver.org); see [CHANGELOG.md](CHANGELOG.md).

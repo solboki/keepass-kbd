@@ -1,0 +1,9 @@
+#!/bin/sh
+# C compiler / linker wrapper for cross builds with Zig (used by scripts/build-rpm.sh).
+ZIG=${ZIG:-$HOME/.local/opt/zig-aarch64-linux-0.14.1/zig}
+n=$#
+while [ $n -gt 0 ]; do
+  a=$1; shift; n=$((n - 1))
+  case $a in --target=*|-m32|-march=*) ;; *) set -- "$@" "$a" ;; esac
+done
+exec "$ZIG" cc -target arm-linux-gnueabihf.${KPX_GLIBC:-2.30} "$@"
