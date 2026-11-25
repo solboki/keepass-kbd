@@ -1,0 +1,10 @@
+#!/bin/sh
+# C compiler / linker wrapper for cross builds with Zig (used by scripts/build-rpm.sh).
+ZIG=${ZIG:-$HOME/.local/opt/zig-aarch64-linux-0.14.1/zig}
+# -Wl,--fix-cortex-a53-843419 (added by rustc) is dropped: `zig cc` refuses it.
+n=$#
+while [ $n -gt 0 ]; do
+  a=$1; shift; n=$((n - 1))
+  case $a in --target=*|-march=*|-Wl,--fix-cortex-a53-843419) ;; *) set -- "$@" "$a" ;; esac
+done
+exec "$ZIG" cc -target aarch64-linux-gnu.${KPX_GLIBC:-2.30} "$@"

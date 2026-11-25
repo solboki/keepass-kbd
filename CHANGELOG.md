@@ -5,6 +5,11 @@ incompatible change → `major`. Bump with `scripts/bump-version.sh patch|minor|
 after listing the changes under “Unreleased”.
 
 ## [Unreleased]
+### Changed
+- The RPMs are now built by GitHub Actions (`.github/workflows/build.yml`): tests and the three
+  packages on every push, and on a `vX.Y.Z` tag the packages are attached to the release. Outside
+  Sailfish OS (or with `KPX_CROSS=1`), `scripts/build-rpm.sh` cross-compiles aarch64 with Zig too,
+  so the binary does not depend on the glibc of the build machine.
 
 ## [1.1.3] - 2026-11-25
 ### Added

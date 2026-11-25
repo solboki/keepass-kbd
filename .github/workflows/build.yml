@@ -1,0 +1,124 @@
+name: Build RPM
+
+# Every push and pull request: tests + the three RPMs (kept as workflow artifacts).
+# A tag vX.Y.Z: the same, then the RPMs are attached to the GitHub release of that tag
+# (created with the CHANGELOG section as notes if it does not exist yet).
+
+on:
+  push:
+    branches: [master]
+    tags: ['v*']
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: build-${{ github.ref }}
+  cancel-in-progress: ${{ !startsWith(github.ref, 'refs/tags/') }}
+
+env:
+  CARGO_TERM_COLOR: always
+  ZIG_VERSION: 0.14.1
+  CARGO_GENERATE_RPM_VERSION: 0.21.1
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Check that the tag matches the version
+        if: startsWith(github.ref, 'refs/tags/v')
+        run: |
+          version=$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -n 1)
+          if [ "v$version" != "$GITHUB_REF_NAME" ]; then
+            echo "::error::tag $GITHUB_REF_NAME does not match Cargo.toml version $version"
+            exit 1
+          fi
+
+      - name: Rust targets
+        run: |
+          rustup toolchain install stable --profile minimal
+          rustup default stable
+          rustup target add aarch64-unknown-linux-gnu armv7-unknown-linux-gnueabihf i686-unknown-linux-gnu
+          rustc --version
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Zig (C compiler and linker for the cross builds)
+        uses: mlugg/setup-zig@v2
+        with:
+          version: ${{ env.ZIG_VERSION }}
+
+      - name: cargo-generate-rpm
+        run: |
+          if ! cargo generate-rpm --version 2>/dev/null | grep -q " $CARGO_GENERATE_RPM_VERSION\$"; then
+            cargo install cargo-generate-rpm --version "$CARGO_GENERATE_RPM_VERSION" --locked
+          fi
+
+      - name: Tests
+        run: cargo test --locked
+
+      - name: Build the RPMs (aarch64, armv7hl, i486)
+        run: ZIG=$(command -v zig) scripts/build-rpm.sh all
+
+      - name: Check the RPMs
+        run: |
+          sudo apt-get install -y --no-install-recommends rpm >/dev/null
+          version=$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -n 1)
+          for arch in aarch64 armv7hl i486; do
+            f=target/generate-rpm/keepass-kbd-$version-1.$arch.rpm
+            test -s "$f"
+            test "$(rpm -qp --qf '%{ARCH}' "$f")" = "$arch"
+            rpm -qlp "$f" | grep -qx /usr/bin/keepass-kbd
+          done
+          # No symbol newer than glibc 2.30 (Sailfish OS 4.0).
+          for t in aarch64-unknown-linux-gnu armv7-unknown-linux-gnueabihf i686-unknown-linux-gnu; do
+            max=$(readelf -V target/$t/release/keepass-kbd | grep -o 'GLIBC_[0-9.]*' | sort -Vu | tail -n 1)
+            echo "$t: $max"
+            test "$(printf '%s\n' GLIBC_2.30 "$max" | sort -V | tail -n 1)" = GLIBC_2.30
+          done
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: keepass-kbd-rpms
+          path: target/generate-rpm/*.rpm
+          if-no-files-found: error
+
+  release:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: keepass-kbd-rpms
+          path: rpms
+
+      - name: Publish the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          version=${GITHUB_REF_NAME#v}
+          if gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then
+            gh release upload "$GITHUB_REF_NAME" rpms/keepass-kbd-$version-1.*.rpm --clobber
+            exit 0
+          fi
+          awk -v v="$version" '$0 ~ "^## \\[" v "\\]" {f=1; next} /^## \[/ {f=0} f' CHANGELOG.md > notes.md
+          cat >> notes.md <<'EOF'
+
+          ### Packages
+          Built by GitHub Actions from this tag, cross-compiled with Zig against glibc 2.30.
+          - `aarch64`: the architecture the keyboard is developed and tested on (Jolla Phone, Sailfish OS 5.2).
+          - `armv7hl` (32-bit ARM) and `i486` (x86, SDK emulator): **not tested on a device yet**, feedback welcome.
+
+          `uname -m` tells which one to install (`armv7l` → `armv7hl`, `i686` → `i486`).
+          EOF
+          gh release create "$GITHUB_REF_NAME" --title "KeePass Keyboard $version" \
+            --notes-file notes.md --verify-tag rpms/keepass-kbd-$version-1.*.rpm

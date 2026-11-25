@@ -105,6 +105,12 @@ rustup target add armv7-unknown-linux-gnueabihf i686-unknown-linux-gnu
 scripts/build-rpm.sh armv7hl  # or i486, or all
 ```
 
+On any other machine (PC, CI), aarch64 is cross-compiled the same way
+(`rustup target add aarch64-unknown-linux-gnu`); `KPX_CROSS=1` forces it on the phone.
+
+GitHub Actions (`.github/workflows/build.yml`) runs the tests and builds the three RPMs on every
+push; pushing a `vX.Y.Z` tag attaches them to the release of that tag.
+
 Project layout:
 
 | Path | Content |
