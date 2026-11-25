@@ -5,8 +5,17 @@ incompatible change → `major`. Bump with `scripts/bump-version.sh patch|minor|
 after listing the changes under “Unreleased”.
 
 ## [Unreleased]
+
+## [1.1.3] - 2026-11-25
 ### Added
 - RPMs for armv7hl (32-bit ARM) and i486 (x86), cross-compiled with Zig: `scripts/build-rpm.sh armv7hl|i486|all`.
+### Fixed
+- The service froze (no answer on D-Bus, keyboard stuck) when the database was on a network mount
+  that stopped responding (rclone, sshfs…). File accesses (database, key file) now give up after
+  10 s (3 s for a `stat`) with “the file is not responding”, and only one blocked access per file is
+  kept waiting. Unlocking the password database runs off the D-Bus loop, and the periodic check reads
+  the file without holding the service lock; if the file cannot be read, the database already in
+  memory stays usable and the check is retried later.
 
 ## [1.1.2] - 2026-11-21
 ### Added

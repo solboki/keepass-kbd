@@ -9,10 +9,13 @@ use sha2::{Digest, Sha256};
 use zeroize::Zeroizing;
 
 /// Contenu d'un fichier clé, lu en mémoire (n'importe quel format reconnu par KeePass).
+/// Délai : [`crate::vault::READ_TIMEOUT`].
 pub fn read(path: &Path) -> Result<Zeroizing<Vec<u8>>, String> {
-    std::fs::read(path)
-        .map(Zeroizing::new)
-        .map_err(|e| crate::i18n::tr1("key file unreadable (%1)", &format!("{}: {e}", path.display())))
+    crate::vault::with_timeout(path, crate::vault::READ_TIMEOUT, |path| {
+        std::fs::read(path)
+            .map(Zeroizing::new)
+            .map_err(|e| crate::i18n::tr1("key file unreadable (%1)", &format!("{}: {e}", path.display())))
+    })?
 }
 
 /// Texte d'un fichier clé XML 2.0 pour la clé donnée.

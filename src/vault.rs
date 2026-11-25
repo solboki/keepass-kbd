@@ -4,7 +4,8 @@ use std::collections::BTreeMap;
 use std::fs;
 use std::io::Write;
 use std::path::{Path, PathBuf};
-use std::time::SystemTime;
+use std::sync::{mpsc, Mutex};
+use std::time::{Duration, Instant, SystemTime};
 
 use keepass::db::{EntryId, GroupId};
 use keepass::{Database, DatabaseKey};
@@ -30,9 +31,60 @@ impl Fingerprint {
     }
 }
 
+/// Délai maximal d'une lecture de fichier (base, fichier clé). Au-delà, le fichier est jugé
+/// injoignable : montage réseau (rclone, sshfs…) qui ne répond plus, carte SD retirée…
+pub const READ_TIMEOUT: Duration = Duration::from_secs(10);
+/// Délai maximal d'un `stat` de surveillance.
+pub const STAT_TIMEOUT: Duration = Duration::from_secs(3);
+
+/// Lectures en cours : (fichier, début). Une lecture bloquée dans le noyau ne peut pas être
+/// interrompue ; son fil reste en attente et n'est retiré d'ici que s'il finit par aboutir.
+static IN_FLIGHT: Mutex<Vec<(PathBuf, Instant)>> = Mutex::new(Vec::new());
+
+/// Exécute `f` (accès au fichier `path`) sur un fil à part et attend au plus `timeout`.
+/// Tant qu'un accès précédent au même fichier est bloqué au-delà du délai, échoue aussitôt
+/// au lieu d'empiler un fil de plus : un seul fil par fichier peut rester coincé.
+pub fn with_timeout<T: Send + 'static>(
+    path: &Path,
+    timeout: Duration,
+    f: impl FnOnce(&Path) -> T + Send + 'static,
+) -> Result<T, String> {
+    let not_responding = || crate::i18n::tr1("the file is not responding (%1)", &path.display().to_string());
+    let started = Instant::now();
+    {
+        let mut inflight = IN_FLIGHT.lock().unwrap_or_else(|e| e.into_inner());
+        if inflight.iter().any(|(p, t)| p == path && t.elapsed() > timeout) {
+            return Err(not_responding());
+        }
+        inflight.push((path.to_path_buf(), started));
+    }
+    let (tx, rx) = mpsc::channel();
+    let owned = path.to_path_buf();
+    let spawned = std::thread::Builder::new().name("file-io".into()).spawn(move || {
+        let r = f(&owned);
+        let mut inflight = IN_FLIGHT.lock().unwrap_or_else(|e| e.into_inner());
+        if let Some(i) = inflight.iter().position(|(p, t)| *p == owned && *t == started) {
+            inflight.remove(i);
+        }
+        drop(inflight);
+        let _ = tx.send(r);
+    });
+    if let Err(e) = spawned {
+        IN_FLIGHT.lock().unwrap_or_else(|e| e.into_inner()).retain(|(p, t)| !(p == path && *t == started));
+        return Err(format!("thread: {e}"));
+    }
+    rx.recv_timeout(timeout).map_err(|_| {
+        eprintln!("accès à {} : pas de réponse après {} s", path.display(), timeout.as_secs());
+        not_responding()
+    })
+}
+
 /// Métadonnées rapides (sans lecture du contenu) pour la surveillance périodique.
+/// `None` si le fichier est absent ou ne répond pas.
 pub fn quick_stat(path: &Path) -> Option<(u64, Option<SystemTime>)> {
-    fs::metadata(path).ok().map(|m| (m.len(), m.modified().ok()))
+    with_timeout(path, STAT_TIMEOUT, |p| fs::metadata(p).ok().map(|m| (m.len(), m.modified().ok())))
+        .ok()
+        .flatten()
 }
 
 pub struct Credentials {
@@ -113,11 +165,14 @@ fn all_urls(e: &keepass::db::EntryRef<'_>) -> Vec<String> {
     v
 }
 
-fn read_file(path: &Path) -> Result<(Zeroizing<Vec<u8>>, Fingerprint), String> {
-    let bytes = fs::read(path).map_err(|e| format!("reading {}: {e}", path.display()))?;
-    let meta = fs::metadata(path).map_err(|e| format!("stat : {e}"))?;
-    let fp = Fingerprint::of_bytes(&bytes, &meta);
-    Ok((Zeroizing::new(bytes), fp))
+/// Lit le fichier et calcule son empreinte, avec le délai [`READ_TIMEOUT`].
+pub fn read_file(path: &Path) -> Result<(Zeroizing<Vec<u8>>, Fingerprint), String> {
+    with_timeout(path, READ_TIMEOUT, |path| {
+        let bytes = Zeroizing::new(fs::read(path).map_err(|e| format!("reading {}: {e}", path.display()))?);
+        let meta = fs::metadata(path).map_err(|e| format!("stat : {e}"))?;
+        let fp = Fingerprint::of_bytes(&bytes, &meta);
+        Ok((bytes, fp))
+    })?
 }
 
 pub fn open_err(e: keepass::db::DatabaseOpenError) -> String {
@@ -146,6 +201,11 @@ impl Vault {
     /// Relit le fichier s'il a changé. Renvoie Ok(true) si la base a été rechargée.
     pub fn reload_if_changed(&mut self) -> Result<bool, String> {
         let (raw, fp) = read_file(&self.path)?;
+        self.reload_from(raw, fp)
+    }
+
+    /// Recharge à partir d'un contenu lu par [`read_file`] (hors verrou). Ok(true) si la base a changé.
+    pub fn reload_from(&mut self, raw: Zeroizing<Vec<u8>>, fp: Fingerprint) -> Result<bool, String> {
         if fp.sha256 == self.fingerprint.sha256 {
             self.fingerprint = fp; // mtime peut avoir bougé sans changement de contenu
             return Ok(false);
@@ -786,6 +846,27 @@ fn histogram_diff(a: &BTreeMap<String, usize>, b: &BTreeMap<String, usize>) -> V
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn with_timeout_gives_up_and_does_not_pile_up_threads() {
+        let path = Path::new("/keepass-kbd-test/slow");
+        let short = Duration::from_millis(100);
+        // Accès qui ne répond pas dans le délai.
+        let t = Instant::now();
+        let r = with_timeout(path, short, |_| std::thread::sleep(Duration::from_millis(600)));
+        assert!(r.is_err());
+        assert!(t.elapsed() < Duration::from_millis(400));
+        // Tant que le premier est bloqué au-delà du délai : échec immédiat, sans nouveau fil.
+        std::thread::sleep(Duration::from_millis(50));
+        let t = Instant::now();
+        assert!(with_timeout(path, short, |_| 1).is_err());
+        assert!(t.elapsed() < Duration::from_millis(50));
+        // Un autre fichier n'est pas concerné.
+        assert_eq!(with_timeout(Path::new("/keepass-kbd-test/other"), short, |_| 2), Ok(2));
+        // Une fois l'accès bloqué terminé, le fichier redevient utilisable.
+        std::thread::sleep(Duration::from_millis(700));
+        assert_eq!(with_timeout(path, short, |_| 3), Ok(3));
+    }
+
     use super::*;
 
     #[test]

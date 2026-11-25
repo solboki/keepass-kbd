@@ -79,7 +79,7 @@ impl Inner {
             "disabled"
         } else if self.vault.is_some() {
             "unlocked"
-        } else if self.cfg.database.as_os_str().is_empty() || !self.cfg.database.is_file() {
+        } else if self.cfg.database.as_os_str().is_empty() || !file_present(&self.cfg.database) {
             "missing"
         } else {
             "locked"
@@ -97,7 +97,7 @@ impl Inner {
             "none"
         } else if self.otp_vault.is_some() {
             "unlocked"
-        } else if !self.cfg.otp_database.is_file() {
+        } else if !file_present(&self.cfg.otp_database) {
             "missing"
         } else {
             "locked"
@@ -228,6 +228,12 @@ fn list_files_json(path: &str, kind: &str, current_db: &std::path::Path) -> Stri
     .to_string()
 }
 
+/// Le fichier existe. Un fichier qui ne répond pas (montage réseau figé) est considéré comme
+/// présent : le déverrouillage dira alors qu'il ne répond pas.
+fn file_present(path: &std::path::Path) -> bool {
+    crate::vault::with_timeout(path, crate::vault::STAT_TIMEOUT, |p| p.is_file()).unwrap_or(true)
+}
+
 /// Fichier clé configuré, lu en mémoire.
 fn read_keyfile(path: Option<&PathBuf>) -> Result<Option<Zeroizing<Vec<u8>>>, String> {
     path.map(|p| crate::keyfile::read(p)).transpose()
@@ -235,11 +241,14 @@ fn read_keyfile(path: Option<&PathBuf>) -> Result<Option<Zeroizing<Vec<u8>>>, St
 
 /// Le fichier commence par la signature d'une base KeePass 2 (.kdbx).
 fn is_kdbx(path: &std::path::Path) -> bool {
-    let mut head = [0u8; 8];
-    std::fs::File::open(path)
-        .and_then(|mut f| std::io::Read::read_exact(&mut f, &mut head))
-        .is_ok()
-        && head == [0x03, 0xd9, 0xa2, 0x9a, 0x67, 0xfb, 0x4b, 0xb5]
+    crate::vault::with_timeout(path, crate::vault::READ_TIMEOUT, |path| {
+        let mut head = [0u8; 8];
+        std::fs::File::open(path)
+            .and_then(|mut f| std::io::Read::read_exact(&mut f, &mut head))
+            .is_ok()
+            && head == [0x03, 0xd9, 0xa2, 0x9a, 0x67, 0xfb, 0x4b, 0xb5]
+    })
+    .unwrap_or(false)
 }
 
 pub struct Service {
@@ -406,13 +415,19 @@ impl Service {
             Err(e) => return Ok(json!({"ok": false, "error": e}).to_string()),
         };
         let creds = Credentials { password, keyfile };
-        let result = Vault::open(&path, creds);
+        // Lecture (avec délai) et dérivation Argon2 hors de la boucle D-Bus.
+        let open_path = path.clone();
+        let result = blocking::unblock(move || {
+            let v = Vault::open(&open_path, creds)?;
+            Ok::<_, String>((v, quick_stat(&open_path)))
+        })
+        .await;
         let unlocked = result.is_ok();
         let reply = {
             let mut g = self.shared.lock().unwrap();
             match result {
-                Ok(v) => {
-                    g.last_stat = quick_stat(&path);
+                Ok((v, stat)) => {
+                    g.last_stat = stat;
                     g.vault = Some(v);
                     g.unlocked_at = Some(Instant::now());
                     g.message.clear();
@@ -454,11 +469,16 @@ impl Service {
             password = Zeroizing::new(String::new());
         }
         // Dérivation Argon2 hors de la boucle D-Bus.
-        let result = blocking::unblock(move || Vault::open(&path, Credentials { password, keyfile })).await;
+        let result = blocking::unblock(move || {
+            let v = Vault::open(&path, Credentials { password, keyfile })?;
+            let stat = quick_stat(&path);
+            Ok::<_, String>((v, stat))
+        })
+        .await;
         let reply = match result {
-            Ok(v) => {
+            Ok((v, stat)) => {
                 let mut g = self.shared.lock().unwrap();
-                g.otp_last_stat = quick_stat(&v.path);
+                g.otp_last_stat = stat;
                 g.otp_vault = Some(v);
                 g.otp_unlocked_at = Some(Instant::now());
                 json!({"ok": true}).to_string()
@@ -1291,20 +1311,19 @@ fn emit_changed(conn: &zbus::blocking::Connection) {
 }
 
 /// Surveillance : rechargement quand le fichier change, verrouillage après inactivité.
+/// Les accès au fichier (stat, lecture) se font sans tenir le verrou partagé : un fichier qui ne
+/// répond plus (montage réseau) ne bloque ni le service D-Bus ni le clavier.
 pub fn spawn_watcher(shared: Shared, conn: zbus::blocking::Connection) {
     std::thread::spawn(move || loop {
         let poll = shared.lock().unwrap().cfg.poll_seconds.max(2);
         std::thread::sleep(Duration::from_secs(poll));
         let mut changed = false;
         let mut reloaded = Vec::new();
-        {
-            let mut g = shared.lock().unwrap();
-            for which in [Which::Main, Which::Otp] {
-                let (c, r) = watch_one(&mut g, which);
-                changed |= c;
-                if r {
-                    reloaded.push(which);
-                }
+        for which in [Which::Main, Which::Otp] {
+            let (c, r) = watch_one(&shared, which);
+            changed |= c;
+            if r {
+                reloaded.push(which);
             }
         }
         if changed {
@@ -1318,35 +1337,56 @@ pub fn spawn_watcher(shared: Shared, conn: zbus::blocking::Connection) {
 
 /// Une base : reverrouillage à l'échéance, rechargement si le fichier a changé.
 /// Renvoie (changement à annoncer, base rechargée).
-fn watch_one(g: &mut Inner, which: Which) -> (bool, bool) {
-    let unlocked_at = match which {
-        Which::Main => g.unlocked_at,
-        Which::Otp => g.otp_unlocked_at,
-    };
-    if g.vault_of(which).is_none() {
-        return (false, false);
-    }
-    let expired = match (g.cfg.relock_after(), unlocked_at) {
-        (Some(max), Some(t)) => t.elapsed() > max,
-        _ => false,
-    };
-    if expired {
-        match which {
-            Which::Main => g.lock(&tr("master password required again")),
-            Which::Otp => g.lock_otp(),
+fn watch_one(shared: &Shared, which: Which) -> (bool, bool) {
+    let (path, last) = {
+        let mut g = shared.lock().unwrap();
+        if g.vault_of(which).is_none() {
+            return (false, false);
         }
-        return (true, false);
-    }
-    let stat = quick_stat(&which.path(&g.cfg));
-    let last = match which {
-        Which::Main => &mut g.last_stat,
-        Which::Otp => &mut g.otp_last_stat,
+        let unlocked_at = match which {
+            Which::Main => g.unlocked_at,
+            Which::Otp => g.otp_unlocked_at,
+        };
+        let expired = match (g.cfg.relock_after(), unlocked_at) {
+            (Some(max), Some(t)) => t.elapsed() > max,
+            _ => false,
+        };
+        if expired {
+            match which {
+                Which::Main => g.lock(&tr("master password required again")),
+                Which::Otp => g.lock_otp(),
+            }
+            return (true, false);
+        }
+        let last = match which {
+            Which::Main => g.last_stat,
+            Which::Otp => g.otp_last_stat,
+        };
+        (which.path(&g.cfg), last)
     };
-    if stat.is_none() || stat == *last {
+    // Hors verrou : stat puis lecture, chacun avec son délai.
+    let stat = quick_stat(&path);
+    if stat.is_none() || stat == last {
         return (false, false);
     }
-    *last = stat;
-    match g.vault_of(which).unwrap().reload_if_changed() {
+    let (raw, fp) = match crate::vault::read_file(&path) {
+        Ok(r) => r,
+        Err(e) => {
+            // Fichier momentanément illisible (réseau coupé…) : la base déjà en mémoire reste
+            // utilisable ; last_stat n'est pas mis à jour, la lecture sera retentée.
+            eprintln!("lecture impossible ({which:?}), nouvel essai plus tard : {e}");
+            return (false, false);
+        }
+    };
+    let mut g = shared.lock().unwrap();
+    if which.path(&g.cfg) != path || g.vault_of(which).is_none() {
+        return (false, false); // base changée ou verrouillée entre-temps
+    }
+    match which {
+        Which::Main => g.last_stat = stat,
+        Which::Otp => g.otp_last_stat = stat,
+    }
+    match g.vault_of(which).unwrap().reload_from(raw, fp) {
         Ok(true) => {
             if which == Which::Main {
                 g.message = tr("database reloaded");
